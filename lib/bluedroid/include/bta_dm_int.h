@@ -28,7 +28,9 @@
 #if (BLE_FEAT_DBAF == TRUE) || (BLE_FEAT_LL_EXT_FEAT == TRUE) || (BLE_FEAT_LE_UTP == TRUE)
 #include "stack/hcimsgs.h"
 #endif
+#if BTA_DYNAMIC_MEMORY == TRUE
 #include "freertos/semphr.h"
+#endif
 #include "bta/bta_sys.h"
 #if (BLE_INCLUDED == TRUE && (defined BTA_GATT_INCLUDED) && (BTA_GATT_INCLUDED == TRUE))
 #include "bta/bta_gatt_api.h"

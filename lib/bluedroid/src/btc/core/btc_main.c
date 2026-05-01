@@ -11,14 +11,16 @@
 #include "esp_err.h"
 #include "btc/btc_config.h"
 #include "osi/alarm.h"
+#include "osi/semaphore.h"
 #include "btc/btc_ble_storage.h"
 #include "btc_gap_ble.h"
 #include "bta_gattc_int.h"
 #include "bta_gatts_int.h"
 #include "bta_dm_int.h"
+#define BIT(i) (1 << (i))
 
 static future_t *main_future[BTC_MAIN_FUTURE_NUM];
-static SemaphoreHandle_t s_init_done_sem = NULL;
+static osi_sem_t s_init_done_sem;
 static bool s_init_clean = false;
 
 extern int bte_main_boot_entry(void *cb);
@@ -56,7 +58,7 @@ void btc_init_callback(bt_status_t status)
 void btc_cleanup_partial_init(void)
 {
     if (s_init_clean) {
-        xSemaphoreTake(s_init_done_sem, portMAX_DELAY);
+        osi_sem_take(&s_init_done_sem, OSI_SEM_MAX_TIMEOUT);
         bte_main_shutdown();
 #if (SMP_INCLUDED)
         btc_config_clean_up();
@@ -67,14 +69,9 @@ void btc_cleanup_partial_init(void)
         vSemaphoreDelete(deinit_semaphore);
         deinit_semaphore = NULL;
 #endif /* #if BTA_DYNAMIC_MEMORY */
-        vSemaphoreDelete(s_init_done_sem);
-        s_init_done_sem = NULL;
+        osi_sem_free(&s_init_done_sem);
         s_init_clean = false;
     } else {
-        if (s_init_done_sem) {
-            vSemaphoreDelete(s_init_done_sem);
-            s_init_done_sem = NULL;
-        }
         osi_alarm_deinit();
         osi_alarm_delete_mux();
     }
@@ -84,8 +81,8 @@ static void btc_init_bluetooth(void)
 {
     osi_alarm_create_mux();
     osi_alarm_init();
-    s_init_done_sem = xSemaphoreCreateBinary();
-    if ((s_init_done_sem == NULL) || (bte_main_boot_entry(btc_init_callback) != 0)) {
+    osi_sem_new(&s_init_done_sem, 1, 0);
+    if (bte_main_boot_entry(btc_init_callback) != 0) {
         future_ready(*btc_main_get_future_p(BTC_MAIN_INIT_FUTURE), FUTURE_FAIL);
         return;
     }
@@ -101,7 +98,7 @@ static void btc_init_bluetooth(void)
 #if BTA_DYNAMIC_MEMORY
     deinit_semaphore = xSemaphoreCreateBinary();
 #endif /* #if BTA_DYNAMIC_MEMORY */
-    xSemaphoreGive(s_init_done_sem);
+    osi_sem_give(&s_init_done_sem);
 }
 
 
@@ -129,10 +126,6 @@ static void btc_deinit_bluetooth(void)
     vSemaphoreDelete(deinit_semaphore);
     deinit_semaphore = NULL;
 #endif /* #if BTA_DYNAMIC_MEMORY */
-    if (s_init_done_sem) {
-        vSemaphoreDelete(s_init_done_sem);
-        s_init_done_sem = NULL;
-    }
 }
 
 void btc_main_call_handler(btc_msg_t *msg)

@@ -389,7 +389,7 @@ tAVDT_CCB *avdt_ccb_alloc(BD_ADDR bd_addr)
                 p_ccb = NULL;
                 break;
             }
-            p_ccb->timer_entry.param = (UINT32) p_ccb;
+            p_ccb->timer_entry.param = (uintptr_t) p_ccb;
             AVDT_TRACE_DEBUG("avdt_ccb_alloc %d\n", i);
             break;
         }

@@ -15,6 +15,13 @@
  *  limitations under the License.
  *
  ******************************************************************************/
+
+#include "common/bt_target.h"
+
+#if( defined BLE_INCLUDED ) && (BLE_INCLUDED == TRUE)
+#if( defined BTA_GATT_INCLUDED ) && (GATTC_INCLUDED == TRUE)
+// #if( defined GATTC_CACHE_NVS ) && (GATTC_CACHE_NVS == TRUE)
+
 #include <string.h>
 #include <stdio.h>
 #include "bta/bta_gattc_co.h"
@@ -29,10 +36,6 @@
 #include "osi/allocator.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-
-#if( defined BLE_INCLUDED ) && (BLE_INCLUDED == TRUE)
-#if( defined BTA_GATT_INCLUDED ) && (GATTC_INCLUDED == TRUE)
-// #if( defined GATTC_CACHE_NVS ) && (GATTC_CACHE_NVS == TRUE)
 
 #define GATT_CACHE_PREFIX "gatt_"
 #define INVALID_ADDR_NUM 0xff

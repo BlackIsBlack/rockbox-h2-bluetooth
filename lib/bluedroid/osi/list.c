@@ -181,9 +181,8 @@ bool list_remove(list_t *list, void *data)
     }
 
     if (list->head->data == data) {
-        const bool was_tail = (list->tail == list->head);
         list_node_t *next = list_free_node(list, list->head);
-        if (was_tail) {
+        if (list->tail == list->head) {
             list->tail = next;
         }
         list->head = next;
@@ -192,9 +191,8 @@ bool list_remove(list_t *list, void *data)
 
     for (list_node_t *prev = list->head, *node = list->head->next; node; prev = node, node = node->next)
         if (node->data == data) {
-            const bool was_tail = (list->tail == node);
             prev->next = list_free_node(list, node);
-            if (was_tail) {
+            if (list->tail == node) {
                 list->tail = prev;
             }
             return true;
@@ -213,9 +211,8 @@ bool list_delete(list_t *list, void *data)
     }
 
     if (list->head->data == data) {
-        const bool was_tail = (list->tail == list->head);
         list_node_t *next = list_delete_node(list, list->head);
-        if (was_tail) {
+        if (list->tail == list->head) {
             list->tail = next;
         }
         list->head = next;
@@ -224,9 +221,8 @@ bool list_delete(list_t *list, void *data)
 
     for (list_node_t *prev = list->head, *node = list->head->next; node; prev = node, node = node->next)
         if (node->data == data) {
-            const bool was_tail = (list->tail == node);
             prev->next = list_delete_node(list, node);
-            if (was_tail) {
+            if (list->tail == node) {
                 list->tail = prev;
             }
             return true;

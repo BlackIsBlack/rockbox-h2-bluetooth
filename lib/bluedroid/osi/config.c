@@ -5,9 +5,8 @@
  */
 
 #define LOG_TAG "bt_osi_config"
-#include "esp_system.h"
-#include "nvs_flash.h"
-#include "nvs.h"
+#include "file.h"
+#include "fcntl.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -16,14 +15,11 @@
 #include <string.h>
 
 #include "bt_common.h"
-#include "esp_assume.h"
+#include "assert.h"
 #include "osi/allocator.h"
 #include "osi/config.h"
 #include "osi/list.h"
 
-#define CONFIG_FILE_MAX_SIZE             (1536)//1.5k
-#define CONFIG_FILE_DEFAULE_LENGTH       (2048)
-#define CONFIG_KEY                       "bt_cfg_key"
 typedef struct {
     char *key;
     char *value;
@@ -41,7 +37,7 @@ struct config_t {
 // Empty definition; this type is aliased to list_node_t.
 struct config_section_iter_t {};
 
-static bool config_parse(nvs_handle_t fp, config_t *config);
+static void config_parse(int fp, config_t *config);
 
 static section_t *section_new(const char *name);
 static void section_free(void *ptr);
@@ -81,26 +77,22 @@ config_t *config_new(const char *filename)
         return NULL;
     }
 
-    esp_err_t err;
-    nvs_handle_t fp;
-    err = nvs_open(filename, NVS_READWRITE, &fp);
-    if (err != ESP_OK) {
-        if (err == ESP_ERR_NVS_NOT_INITIALIZED) {
-            OSI_TRACE_ERROR("%s: NVS not initialized. "
-                      "Call nvs_flash_init before initializing bluetooth.", __func__);
-        } else {
-            OSI_TRACE_ERROR("%s unable to open NVS namespace '%s'\n", __func__, filename);
-        }
+    char actual_path[MAX_PATH];
+    if (filename[0] != '/') {
+        snprintf(actual_path, MAX_PATH, ROCKBOX_DIR "/%s", filename);
+    } else {
+        snprintf(actual_path, MAX_PATH, ROCKBOX_DIR "%s", filename);
+    }
+
+    int fp = open(actual_path, O_RDONLY);
+    if (fp < 0) {
+        OSI_TRACE_ERROR("%s unable to open file '%s'\n", __func__, filename);
         config_free(config);
         return NULL;
     }
 
-    bool ok = config_parse(fp, config);
-    nvs_close(fp);
-    if (!ok) {
-        config_free(config);
-        return NULL;
-    }
+    config_parse(fp, config);
+    close(fp);
     return config;
 }
 
@@ -141,7 +133,7 @@ bool config_has_key_in_section(config_t *config, const char *key, char *key_valu
             entry_t *entry = list_node(node);
             OSI_TRACE_DEBUG("entry->key = %s, entry->value = %s", entry->key, entry->value);
             if (!strcmp(entry->key, key) && !strcmp(entry->value, key_value)) {
-                OSI_TRACE_DEBUG("%s, the irk already in the flash.", __func__);
+                OSI_TRACE_DEBUG("%s, the irk aready in the flash.", __func__);
                 return true;
             }
         }
@@ -226,10 +218,6 @@ void config_set_string(config_t *config, const char *section, const char *key, c
     section_t *sec = section_find(config, section);
     if (!sec) {
         sec = section_new(section);
-        if (sec == NULL) {
-            OSI_TRACE_ERROR("%s unable to allocate section\n", __func__);
-            return;
-        }
         if (insert_back) {
             list_append(config->sections, sec);
         } else {
@@ -240,22 +228,13 @@ void config_set_string(config_t *config, const char *section, const char *key, c
     for (const list_node_t *node = list_begin(sec->entries); node != list_end(sec->entries); node = list_next(node)) {
         entry_t *entry = list_node(node);
         if (!strcmp(entry->key, key)) {
-            char *new_value = osi_strdup(value);
-            if (new_value == NULL) {
-                OSI_TRACE_ERROR("%s unable to allocate entry value\n", __func__);
-                return;
-            }
             osi_free(entry->value);
-            entry->value = new_value;
+            entry->value = osi_strdup(value);
             return;
         }
     }
 
     entry_t *entry = entry_new(key, value);
-    if (entry == NULL) {
-        OSI_TRACE_ERROR("%s unable to allocate entry\n", __func__);
-        return;
-    }
     list_append(sec->entries, entry);
 }
 
@@ -345,102 +324,40 @@ const char *config_section_name(const config_section_node_t *node)
     return section->name;
 }
 
-static bool get_config_size(const config_t *config, size_t *out_size)
+static int get_config_size(const config_t *config)
 {
     assert(config != NULL);
-    assert(out_size != NULL);
 
-    size_t total_size = 0;
+    int w_len = 0, total_size = 0;
 
     for (const list_node_t *node = list_begin(config->sections); node != list_end(config->sections); node = list_next(node)) {
         const section_t *section = (const section_t *)list_node(node);
-        /* CONTRACT / PRECONDITION:
-         * - section->name is guaranteed non-NULL.
-         * - Upstream guard: section_new() stores osi_strdup(name) from config_set_string().
-         */
-        ESP_ASSUME_NONNULL(section->name);
-        size_t w_len = strlen(section->name) + strlen("[]\n"); // format "[section->name]\n"
-        if (total_size > SIZE_MAX - w_len) {
-            return false;
-        }
+        w_len = strlen(section->name) + strlen("[]\n");// format "[section->name]\n"
         total_size += w_len;
 
         for (const list_node_t *enode = list_begin(section->entries); enode != list_end(section->entries); enode = list_next(enode)) {
             const entry_t *entry = (const entry_t *)list_node(enode);
-            /* CONTRACT / PRECONDITION:
-             * - entry->key/value are guaranteed non-NULL.
-             * - Upstream guard: entry_new() stores osi_strdup(key/value) from config_set_string().
-             */
-            ESP_ASSUME_NONNULL(entry->key);
-            ESP_ASSUME_NONNULL(entry->value);
-            w_len = strlen(entry->key) + strlen(entry->value) + strlen(" = \n"); // format "entry->key = entry->value\n"
-            if (total_size > SIZE_MAX - w_len) {
-                return false;
-            }
+            w_len = strlen(entry->key) + strlen(entry->value) + strlen(" = \n");// format "entry->key = entry->value\n"
             total_size += w_len;
         }
 
         // Only add a separating newline if there are more sections.
         if (list_next(node) != list_end(config->sections)) {
-            if (total_size == SIZE_MAX) {
-                return false;
-            }
-            total_size++;  // '\n'
+                total_size ++;  //'\n'
         } else {
             break;
         }
     }
-    if (total_size == SIZE_MAX) {
-        return false;
-    }
-    total_size++; // '\0'
-    *out_size = total_size;
-    return true;
+    total_size ++; //'\0'
+    return total_size;
 }
 
-static int get_config_size_from_flash(nvs_handle_t fp)
+static int get_config_size_from_flash(int fp)
 {
     assert(fp != 0);
 
-    esp_err_t err;
-    const size_t keyname_bufsz = sizeof(CONFIG_KEY) + 5 + 1; // including log10(sizeof(i))
-    char *keyname = osi_calloc(keyname_bufsz);
-    if (!keyname){
-        OSI_TRACE_ERROR("%s, malloc error\n", __func__);
-        return -1;
-    }
-    size_t length = CONFIG_FILE_DEFAULE_LENGTH;
-    size_t total_length = 0;
-    uint16_t i = 0;
-    snprintf(keyname, keyname_bufsz, "%s%d", CONFIG_KEY, 0);
-    err = nvs_get_blob(fp, keyname, NULL, &length);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        osi_free(keyname);
-        return 0;
-    }
-    if (err != ESP_OK) {
-        OSI_TRACE_ERROR("%s, error %d\n", __func__, err);
-        osi_free(keyname);
-        return -2;
-    }
-    total_length += length;
-    while (length == CONFIG_FILE_MAX_SIZE) {
-        length = CONFIG_FILE_DEFAULE_LENGTH;
-        snprintf(keyname, keyname_bufsz, "%s%d", CONFIG_KEY, ++i);
-        err = nvs_get_blob(fp, keyname, NULL, &length);
-
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            break;
-        }
-        if (err != ESP_OK) {
-            OSI_TRACE_ERROR("%s, error %d\n", __func__, err);
-            osi_free(keyname);
-            return -3;
-        }
-        total_length += length;
-    }
-    osi_free(keyname);
-    return total_length;
+    size_t length = ffilesize(fp);
+    return length;
 }
 
 bool config_save(const config_t *config, const char *filename)
@@ -449,137 +366,91 @@ bool config_save(const config_t *config, const char *filename)
     assert(filename != NULL);
     assert(*filename != '\0');
 
-    esp_err_t err;
     int err_code = 0;
-    nvs_handle_t fp;
-    char *buf = NULL;
-    bool nvs_opened = false;
-    const size_t keyname_bufsz = sizeof(CONFIG_KEY) + 5 + 1; // including log10(sizeof(i))
-    char *keyname = osi_calloc(keyname_bufsz);
-    if (!keyname) {
-        err_code |= 0x01;
-        goto error;
-    }
-    size_t config_size = 0;
-    if (!get_config_size(config, &config_size) || config_size == 0) {
-        err_code |= 0x01;
-        goto error;
-    }
-    buf = osi_calloc(config_size);
-    if (!buf) {
+    char *line = osi_calloc(1024);
+    int config_size = get_config_size(config);
+    char *buf = osi_calloc(config_size);
+    if (!line || !buf) {
         err_code |= 0x01;
         goto error;
     }
 
-    err = nvs_open(filename, NVS_READWRITE, &fp);
-    if (err != ESP_OK) {
-        if (err == ESP_ERR_NVS_NOT_INITIALIZED) {
-            OSI_TRACE_ERROR("%s: NVS not initialized. "
-                      "Call nvs_flash_init before initializing bluetooth.", __func__);
-        }
+    char actual_path[MAX_PATH];
+    if (filename[0] != '/') {
+        snprintf(actual_path, MAX_PATH, ROCKBOX_DIR "/%s", filename);
+    } else {
+        snprintf(actual_path, MAX_PATH, ROCKBOX_DIR "%s", filename);
+    }
+    int fp = open(actual_path, O_WRONLY | O_TRUNC | O_CREAT, 0666);
+    if (fp < 0) {
         err_code |= 0x02;
         goto error;
     }
-    nvs_opened = true;
 
-    int w_cnt;
-    size_t w_cnt_total = 0;
+    int w_cnt, w_cnt_total = 0;
     for (const list_node_t *node = list_begin(config->sections); node != list_end(config->sections); node = list_next(node)) {
         const section_t *section = (const section_t *)list_node(node);
-        size_t remaining = (w_cnt_total < config_size) ? (config_size - w_cnt_total) : 0;
-        if (remaining == 0) {
+        w_cnt = snprintf(line, 1024, "[%s]\n", section->name);
+        if(w_cnt < 0) {
+            OSI_TRACE_ERROR("snprintf error w_cnt %d.",w_cnt);
+            err_code |= 0x10;
+            goto error;
+        }
+        if(w_cnt_total + w_cnt > config_size) {
+            OSI_TRACE_ERROR("%s, memcpy size (w_cnt + w_cnt_total = %d) is larger than buffer size (config_size = %d).", __func__, (w_cnt + w_cnt_total), config_size);
             err_code |= 0x20;
             goto error;
         }
-        w_cnt = snprintf(buf + w_cnt_total, remaining, "[%s]\n", section->name);
-        if (w_cnt < 0 || (size_t)w_cnt >= remaining) {
-            err_code |= 0x20;
-            goto error;
-        }
-        OSI_TRACE_DEBUG("section name: %s, w_cnt + w_cnt_total = %d\n", section->name, (int)(w_cnt + w_cnt_total));
-        w_cnt_total += (size_t)w_cnt;
+        OSI_TRACE_DEBUG("section name: %s, w_cnt + w_cnt_total = %d\n", section->name, w_cnt + w_cnt_total);
+        memcpy(buf + w_cnt_total, line, w_cnt);
+        w_cnt_total += w_cnt;
 
         for (const list_node_t *enode = list_begin(section->entries); enode != list_end(section->entries); enode = list_next(enode)) {
             const entry_t *entry = (const entry_t *)list_node(enode);
             OSI_TRACE_DEBUG("(key, val): (%s, %s)\n", entry->key, entry->value);
-            remaining = (w_cnt_total < config_size) ? (config_size - w_cnt_total) : 0;
-            if (remaining == 0) {
+            w_cnt = snprintf(line, 1024, "%s = %s\n", entry->key, entry->value);
+            if(w_cnt < 0) {
+                OSI_TRACE_ERROR("snprintf error w_cnt %d.",w_cnt);
+                err_code |= 0x10;
+                goto error;
+            }
+            if(w_cnt_total + w_cnt > config_size) {
+                OSI_TRACE_ERROR("%s, memcpy size (w_cnt + w_cnt_total = %d) is larger than buffer size.(config_size = %d)", __func__, (w_cnt + w_cnt_total), config_size);
                 err_code |= 0x20;
                 goto error;
             }
-            w_cnt = snprintf(buf + w_cnt_total, remaining, "%s = %s\n", entry->key, entry->value);
-            if (w_cnt < 0 || (size_t)w_cnt >= remaining) {
-                err_code |= 0x20;
-                goto error;
-            }
-            OSI_TRACE_DEBUG("%s, w_cnt + w_cnt_total = %d", __func__, (int)(w_cnt + w_cnt_total));
-            w_cnt_total += (size_t)w_cnt;
+            OSI_TRACE_DEBUG("%s, w_cnt + w_cnt_total = %d", __func__, w_cnt + w_cnt_total);
+            memcpy(buf + w_cnt_total, line, w_cnt);
+            w_cnt_total += w_cnt;
         }
 
         // Only add a separating newline if there are more sections.
         if (list_next(node) != list_end(config->sections)) {
-            if (w_cnt_total + 1 >= config_size) {
-                err_code |= 0x20;
-                goto error;
-            }
-            buf[w_cnt_total++] = '\n';
+            buf[w_cnt_total] = '\n';
+            w_cnt_total += 1;
         } else {
             break;
         }
     }
-    if (w_cnt_total >= config_size) {
-        err_code |= 0x20;
-        goto error;
-    }
     buf[w_cnt_total] = '\0';
-    if (w_cnt_total < CONFIG_FILE_MAX_SIZE) {
-        snprintf(keyname, keyname_bufsz, "%s%d", CONFIG_KEY, 0);
-        err = nvs_set_blob(fp, keyname, buf, w_cnt_total);
-        if (err != ESP_OK) {
-            err_code |= 0x04;
-            goto error;
-        }
-    }else {
-        int count = (int)(w_cnt_total / CONFIG_FILE_MAX_SIZE);
-        assert(count <= 0xFF);
-        for (uint8_t i = 0; i <= count; i++)
-        {
-            snprintf(keyname, keyname_bufsz, "%s%d", CONFIG_KEY, i);
-            if (i == count) {
-                err = nvs_set_blob(fp, keyname, buf + i*CONFIG_FILE_MAX_SIZE, w_cnt_total - i*CONFIG_FILE_MAX_SIZE);
-                OSI_TRACE_DEBUG("save keyname = %s, i = %d, %d\n", keyname, i, w_cnt_total - i*CONFIG_FILE_MAX_SIZE);
-            }else {
-                err = nvs_set_blob(fp, keyname, buf + i*CONFIG_FILE_MAX_SIZE, CONFIG_FILE_MAX_SIZE);
-                OSI_TRACE_DEBUG("save keyname = %s, i = %d, %d\n", keyname, i, CONFIG_FILE_MAX_SIZE);
-            }
-            if (err != ESP_OK) {
-                err_code |= 0x04;
-                goto error;
-            }
-        }
-    }
-
-    err = nvs_commit(fp);
-    if (err != ESP_OK) {
-        err_code |= 0x08;
+    // TODO(skyevg): can write() do a partial write in Rockbox?
+    if (write(fp, buf, w_cnt_total) != w_cnt_total) {
+        close(fp);
+        err_code |= 0x04;
         goto error;
     }
 
-    nvs_close(fp);
-    nvs_opened = false;
+    close(fp);
+    osi_free(line);
     osi_free(buf);
-    osi_free(keyname);
     return true;
 
 error:
-    if (nvs_opened) {
-        nvs_close(fp);
-    }
     if (buf) {
         osi_free(buf);
     }
-    if (keyname) {
-        osi_free(keyname);
+    if (line) {
+        osi_free(line);
     }
     if (err_code) {
         OSI_TRACE_ERROR("%s, err_code: 0x%x\n", __func__, err_code);
@@ -606,66 +477,36 @@ static char *trim(char *str)
     return str;
 }
 
-static bool config_parse(nvs_handle_t fp, config_t *config)
+static void config_parse(int fp, config_t *config)
 {
     assert(fp != 0);
     assert(config != NULL);
 
-    esp_err_t err;
     int line_num = 0;
     int err_code = 0;
-    uint16_t i = 0;
-    size_t length = CONFIG_FILE_DEFAULE_LENGTH;
-    size_t total_length = 0;
     char *line = osi_calloc(1024);
     char *section = osi_calloc(1024);
-    const size_t keyname_bufsz = sizeof(CONFIG_KEY) + 5 + 1; // including log10(sizeof(i))
-    char *keyname = osi_calloc(keyname_bufsz);
     int buf_size = get_config_size_from_flash(fp);
     char *buf = NULL;
 
-    if (buf_size < 0) {
-        err_code |= 0x04;
+    if(buf_size == 0) { //First use nvs
         goto error;
     }
-
-    if(buf_size == 0) { //First use nvs
-        goto ok;
-    }
-    buf = osi_calloc(buf_size);
-    if (!line || !section || !buf || !keyname) {
+    buf = osi_calloc(buf_size + 1);
+    if (!line || !section || !buf) {
         err_code |= 0x01;
         goto error;
     }
-    snprintf(keyname, keyname_bufsz, "%s%d", CONFIG_KEY, 0);
-    err = nvs_get_blob(fp, keyname, buf, &length);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        goto ok;
-    }
-    if (err != ESP_OK) {
+    // TODO(skyevg): can read() do a partial read in Rockbox?
+    if (read(fp, buf, buf_size) != buf_size) {
         err_code |= 0x02;
         goto error;
-    }
-    total_length += length;
-    while (length == CONFIG_FILE_MAX_SIZE) {
-        length = CONFIG_FILE_DEFAULE_LENGTH;
-        snprintf(keyname, keyname_bufsz, "%s%d", CONFIG_KEY, ++i);
-        err = nvs_get_blob(fp, keyname, buf + CONFIG_FILE_MAX_SIZE * i, &length);
-
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            break;
-        }
-        if (err != ESP_OK) {
-            err_code |= 0x02;
-            goto error;
-        }
-        total_length += length;
     }
     char *p_line_end;
     char *p_line_bgn = buf;
     strcpy(section, CONFIG_DEFAULT_SECTION);
 
-    while ( (p_line_bgn < buf + total_length - 1) && (p_line_end = strchr(p_line_bgn, '\n'))) {
+    while ( (p_line_bgn < buf + buf_size - 1) && (p_line_end = strchr(p_line_bgn, '\n'))) {
 
         // get one line
         int line_len = p_line_end - p_line_bgn;
@@ -703,21 +544,6 @@ static bool config_parse(nvs_handle_t fp, config_t *config)
         }
     }
 
-ok:
-    if (buf) {
-        osi_free(buf);
-    }
-    if (line) {
-        osi_free(line);
-    }
-    if (section) {
-        osi_free(section);
-    }
-    if (keyname) {
-        osi_free(keyname);
-    }
-    return true;
-
 error:
     if (buf) {
         osi_free(buf);
@@ -728,13 +554,9 @@ error:
     if (section) {
         osi_free(section);
     }
-    if (keyname) {
-        osi_free(keyname);
-    }
     if (err_code) {
         OSI_TRACE_ERROR("%s returned with err code: %d\n", __func__, err_code);
     }
-    return false;
 }
 
 static section_t *section_new(const char *name)
@@ -746,10 +568,6 @@ static section_t *section_new(const char *name)
 
     section->name = osi_strdup(name);
     section->entries = list_new(entry_free);
-    if (section->name == NULL || section->entries == NULL) {
-        section_free(section);
-        return NULL;
-    }
     return section;
 }
 
@@ -786,10 +604,6 @@ static entry_t *entry_new(const char *key, const char *value)
 
     entry->key = osi_strdup(key);
     entry->value = osi_strdup(value);
-    if (entry->key == NULL || entry->value == NULL) {
-        entry_free(entry);
-        return NULL;
-    }
     return entry;
 }
 
