@@ -74,3 +74,5 @@ osi/include/esp_log.h: stripped down version of esp-idf/components/log/include/e
 osi/include/esp_random.h: stripped down version of esp-idf/components/esp_hw_support/include/esp_random.h
 osi/include/nvs.h: single define, required by src/btc/core/btc_config.c
 osi/include/osi/sys_queue.h: sys/queue.h from uClibc-ng 1.0.57
+include/stack/a2d_codecs.h: basic VS-aware codec identification API
+src/stack/a2dp/a2d_codecs.c: basic VS-aware codec identification API

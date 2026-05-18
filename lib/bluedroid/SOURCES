@@ -199,6 +199,7 @@ src/hci/packet_fragmenter.c
 src/main/bte_init.c
 src/main/bte_main.c
 src/stack/a2dp/a2d_api.c
+src/stack/a2dp/a2d_codecs.c
 src/stack/a2dp/a2d_sbc.c
 src/stack/a2dp/a2d_m24.c
 src/stack/avct/avct_api.c
