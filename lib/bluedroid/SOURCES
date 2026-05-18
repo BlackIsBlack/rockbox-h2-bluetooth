@@ -37,7 +37,6 @@ sbc/encoder/srce/sbc_enc_bit_alloc_ste.c
 sbc/encoder/srce/sbc_enc_coeffs.c
 sbc/encoder/srce/sbc_encoder.c
 sbc/encoder/srce/sbc_packing.c
-sbc/plc/sbc_plc.c
 
 src/api/esp_a2dp_api.c
 src/api/esp_avrc_api.c

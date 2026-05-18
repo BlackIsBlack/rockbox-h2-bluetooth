@@ -17,7 +17,7 @@ CORE_LIBS := $(LIBBLUEDROID) $(CORE_LIBS) $(TLSFLIB)
 
 INCLUDES += -I$(BLUEDROID_DIR)/export -I$(BLUEDROID_DIR)/include \
 			-I$(BLUEDROID_DIR)/osi/include -I$(BLUEDROID_DIR)/sbc/decoder/include \
-			-I$(BLUEDROID_DIR)/sbc/encoder/include -I$(BLUEDROID_DIR)/sbc/plc/include
+			-I$(BLUEDROID_DIR)/sbc/encoder/include
 
 BLUEDROID_FLAGS := $(CFLAGS) -Wno-undef -Wno-unused-parameter -Wno-format
 

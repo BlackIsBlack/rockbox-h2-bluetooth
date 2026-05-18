@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- *  Copyright (C) 1999-2012 Broadcom Corporation
+ *  Copyright 1999-2012 Broadcom Corporation
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ int SBC_init(int pcm_sample_freq, int channels, int bits_per_sample);
 
 /*
  SBC_write - called repeatedly with pcm_in pointer
-    increasing by length until track is finished.
+        increasing by length until track is finished.
 
  pcm_in - pointer to PCM buffer
  length - any
@@ -42,6 +42,6 @@ int SBC_init(int pcm_sample_freq, int channels, int bits_per_sample);
  return - number of bytes written to sbc_out
 */
 
-int SBC_write(unsigned char *pcm_in, int length, unsigned char *sbc_out);
+int SBC_write(unsigned char* pcm_in, int length, unsigned char* sbc_out);
 
 #endif
