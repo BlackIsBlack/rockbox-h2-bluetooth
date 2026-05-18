@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "btc/btc_storage.h"
+#include "bt_common.h"
 #include "btc/btc_ble_storage.h"
 #include "btc/btc_util.h"
 #include "osi/osi.h"
@@ -342,6 +343,31 @@ bt_status_t btc_storage_get_bonded_bt_devices_list(bt_bdaddr_t *bond_dev, int *d
         }
     }
     *dev_num = out_dev_num; /* out_dev_num <= in_dev_num */
+    btc_config_unlock();
+
+    return BT_STATUS_SUCCESS;
+}
+
+bt_status_t btc_storage_get_bonded_bt_device_property(bt_bdaddr_t bd_addr, const char *key, char *value, size_t *len)
+{
+    bdstr_t bdstr;
+    bdaddr_to_string(&bd_addr, bdstr, sizeof(bdstr));
+
+    btc_config_lock();
+    bool ret = btc_config_get_bin(bdstr, key, value, len);
+    btc_config_unlock();
+
+    return ret ? BT_STATUS_SUCCESS : BT_STATUS_FAIL;
+}
+
+bt_status_t btc_storage_set_bonded_bt_device_property(bt_bdaddr_t bd_addr, const char *key, const char *value, size_t len)
+{
+    bdstr_t bdstr;
+    bdaddr_to_string(&bd_addr, bdstr, sizeof(bdstr));
+
+    btc_config_lock();
+    btc_config_set_bin(bdstr, key, value, len);
+    btc_config_flush();
     btc_config_unlock();
 
     return BT_STATUS_SUCCESS;

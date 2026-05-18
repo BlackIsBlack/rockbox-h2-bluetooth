@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "common/bt_defs.h"
 #include "common/bt_target.h"
 #include <string.h>
 #include "esp_bt_main.h"
@@ -375,6 +376,38 @@ esp_err_t esp_bt_gap_get_bond_device_list(int *dev_num, esp_bd_addr_t *dev_list)
     }
 
     ret = btc_storage_get_bonded_bt_devices_list((bt_bdaddr_t *)dev_list, dev_num);
+
+    return (ret == BT_STATUS_SUCCESS ? ESP_OK : ESP_FAIL);
+}
+
+esp_err_t esp_bt_gap_get_bond_device_property(esp_bd_addr_t bd_addr, const char *key, char *value, size_t *len)
+{
+    int ret;
+
+    if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    bt_bdaddr_t addr;
+    memcpy(&addr, bd_addr, sizeof(esp_bd_addr_t));
+
+    ret = btc_storage_get_bonded_bt_device_property(addr, key, value, len);
+
+    return (ret == BT_STATUS_SUCCESS ? ESP_OK : ESP_FAIL);
+}
+
+esp_err_t esp_bt_gap_set_bond_device_property(esp_bd_addr_t bd_addr, const char *key, const char *value, size_t len)
+{
+    int ret;
+
+    if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    bt_bdaddr_t addr;
+    memcpy(&addr, bd_addr, sizeof(esp_bd_addr_t));
+
+    ret = btc_storage_set_bonded_bt_device_property(addr, key, value, len);
 
     return (ret == BT_STATUS_SUCCESS ? ESP_OK : ESP_FAIL);
 }

@@ -7,6 +7,7 @@
 #ifndef __ESP_GAP_BT_API_H__
 #define __ESP_GAP_BT_API_H__
 
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
 #include "esp_bt_defs.h"
@@ -952,6 +953,9 @@ int esp_bt_gap_get_bond_device_num(void);
 *                  - ESP_FAIL: others
 */
 esp_err_t esp_bt_gap_get_bond_device_list(int *dev_num, esp_bd_addr_t *dev_list);
+
+esp_err_t esp_bt_gap_get_bond_device_property(esp_bd_addr_t bd_addr, const char *key, char *value, size_t *len);
+esp_err_t esp_bt_gap_set_bond_device_property(esp_bd_addr_t bd_addr, const char *key, const char *value, size_t len);
 
 /**
 * @brief            Set pin type and default pin code for legacy pairing.

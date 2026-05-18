@@ -89,6 +89,9 @@ int btc_storage_get_num_bt_bond_devices(void);
 *******************************************************************************/
 bt_status_t btc_storage_get_bonded_bt_devices_list(bt_bdaddr_t *bond_dev, int *dev_num);
 
+bt_status_t btc_storage_get_bonded_bt_device_property(bt_bdaddr_t bd_addr, const char *key, char *value, size_t *len);
+bt_status_t btc_storage_set_bonded_bt_device_property(bt_bdaddr_t bd_addr, const char *key, const char *value, size_t len);
+
 /*******************************************************************************
 **
 ** Function         btc_storage_get_num_all_bond_devices
