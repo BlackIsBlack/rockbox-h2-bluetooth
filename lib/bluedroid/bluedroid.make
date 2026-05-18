@@ -18,7 +18,8 @@ CORE_LIBS := $(LIBBLUEDROID) $(CORE_LIBS) $(TLSFLIB)
 INCLUDES += -I$(BLUEDROID_DIR)/export -I$(BLUEDROID_DIR)/include \
 			-I$(BLUEDROID_DIR)/osi/include -I$(BLUEDROID_DIR)/sbc/decoder/include \
 			-I$(BLUEDROID_DIR)/sbc/encoder/include -I$(BLUEDROID_DIR)/libldac/inc \
-			-I$(BLUEDROID_DIR)/libldac/abr/inc -I$(BLUEDROID_DIR)/encoder_for_aptx/include
+			-I$(BLUEDROID_DIR)/libldac/abr/inc -I$(BLUEDROID_DIR)/encoder_for_aptx/include \
+			-I$(BLUEDROID_DIR)/encoder_for_aptxhd/include
 
 BLUEDROID_FLAGS := $(CFLAGS) -Wno-undef -Wno-unused-parameter -Wno-format -D_32BIT_FIXED_POINT
 

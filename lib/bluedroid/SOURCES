@@ -20,6 +20,11 @@ encoder_for_aptx/src/QmfConv.c
 encoder_for_aptx/src/QuantiseDifference.c
 encoder_for_aptx/src/aptXbtenc.c
 
+encoder_for_aptxhd/src/ProcessSubband.c
+encoder_for_aptxhd/src/QmfConv.c
+encoder_for_aptxhd/src/QuantiseDifference.c
+encoder_for_aptxhd/src/aptXHDbtenc.c
+
 libldac/src/ldaclib.c
 libldac/src/ldacBT.c
 libldac/abr/src/ldacBT_abr.c
