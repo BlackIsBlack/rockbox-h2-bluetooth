@@ -15,6 +15,10 @@ osi/thread.c
 osi/osi.c
 osi/semaphore.c
 
+libldac/src/ldaclib.c
+libldac/src/ldacBT.c
+libldac/abr/src/ldacBT_abr.c
+
 sbc/decoder/srce/alloc.c
 sbc/decoder/srce/bitalloc-sbc.c
 sbc/decoder/srce/bitalloc.c
