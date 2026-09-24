@@ -11,6 +11,7 @@
 #include "esp_bt_defs.h"
 #include "esp_a2dp_legacy_api.h"
 #include "sdkconfig.h"
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -172,19 +173,73 @@ typedef struct {
 } __attribute__((packed)) esp_a2d_cie_atrac_t;
 
 /**
+ * @brief AptX Media Codec Capabilities
+ */
+typedef struct {
+    uint8_t     ch_mode         : 4;        /*!< Channel Mode */
+    uint8_t     samp_freq       : 4;        /*!< Sample Rate */
+} __attribute__((packed)) esp_a2d_mcc_aptx_t;
+
+/**
+ * @brief AptX HD Media Codec Capabilities
+ */
+typedef struct {
+    uint8_t     ch_mode         : 4;        /*!< Channel Mode */
+    uint8_t     samp_freq       : 4;        /*!< Sample Rate */
+    uint8_t     reserved0;                  /*!< acl_sprint_reserved0 */
+    uint8_t     reserved1;                  /*!< acl_sprint_reserved1 */
+    uint8_t     reserved2;                  /*!< acl_sprint_reserved2 */
+    uint8_t     reserved3;                  /*!< acl_sprint_reserved3 */
+} __attribute__((packed)) esp_a2d_mcc_aptx_hd_t;
+
+/**
+ * @brief LDAC Media Codec Capabilities
+ */
+typedef struct {
+    uint8_t     samp_freq       : 6;        /*!< Sample Rate */
+    uint8_t     unknown0        : 2;        /*!< Unknown, masked off in Fluoride */
+    uint8_t     ch_mode         : 3;        /*!< Channel Mode */
+    uint8_t     unknown1        : 5;        /*!< Unknown, masked off in Fluoride */
+} __attribute__((packed)) esp_a2d_mcc_ldac_t;
+
+/**
+ * @brief Opus Media Codec Capabilities
+ */
+typedef struct {
+    uint8_t     ch_mode         : 3;        /*!< Channel Mode */
+    uint8_t     frame_size      : 2;        /*!< Frame Size */
+    uint8_t     unknown0        : 2;        /*!< Unknown, masked off in Fluoride */
+    uint8_t     samp_freq       : 1;        /*!< Sample Rate */
+} __attribute__((packed)) esp_a2d_mcc_opus_t;
+
+/**
+ * @brief A2DP Vendor Specific A2DP codec capabilities information struct
+ */
+typedef struct {
+    uint32_t    vendor_id;                  /*!< Vendor ID */
+    uint16_t    codec_id;                   /*!< Vendor Specific Codec ID */
+    union {
+        esp_a2d_mcc_aptx_t aptx_info;          /*!< AptX Media Codec Capabilities */
+        esp_a2d_mcc_aptx_hd_t aptx_hd_info;    /*!< AptX HD Media Codec Capabilities */
+        esp_a2d_mcc_ldac_t ldac_info;          /*!< LDAC Media Codec Capabilities */
+        esp_a2d_mcc_opus_t opus_info;          /*!< Opus Media Codec Capabilities */
+    } mcc;                                  /*!< Vendor Specific Value */
+} __attribute__((packed)) esp_a2d_cie_vs_t;
+
+/**
  * @brief A2DP media codec capabilities union
  */
 typedef struct {
-    esp_a2d_mct_t type;                        /*!< A2DP media codec type */
-#define ESP_A2D_CIE_LEN_SBC          (4)       /*!< SBC cie length */
-#define ESP_A2D_CIE_LEN_M12          (4)       /*!< MPEG-1,2 cie length */
-#define ESP_A2D_CIE_LEN_M24          (6)       /*!< MPEG-2,4 AAC cie length */
-#define ESP_A2D_CIE_LEN_ATRAC        (7)       /*!< ATRAC family cie length */
+    uint8_t       losc;                        /*!< Length Of Service Capability */
+    uint8_t       media_type;                  /*!< AVDTP Media Type */
+    esp_a2d_mct_t codec_type;                  /*!< A2DP media codec type */
     union {
         esp_a2d_cie_sbc_t   sbc_info;          /*!< SBC codec capabilities */
         esp_a2d_cie_m12_t   m12_info;          /*!< MPEG-1,2 audio codec capabilities */
         esp_a2d_cie_m24_t   m24_info;          /*!< MPEG-2, 4 AAC audio codec capabilities */
         esp_a2d_cie_atrac_t atrac_info;        /*!< ATRAC family codec capabilities */
+        esp_a2d_cie_vs_t    vs_info;           /*!< Vendor Specific A2DP codec capabilities */
+        uint8_t             unk_info[17];      // MUST always be AVDT_CODEC_SIZE - 3
     } cie;                                     /*!< A2DP codec information element */
 } __attribute__((packed)) esp_a2d_mcc_t;
 
@@ -396,6 +451,7 @@ typedef union {
      */
     struct a2d_report_snk_codec_caps_param {
         esp_a2d_conn_hdl_t conn_hdl;           /*!< connection handle */
+        uint16_t mtu;                          /*!< MTU of audio connection */
         esp_a2d_mcc_t mcc;                     /*!< A2DP sink media codec capability information */
     } a2d_report_snk_codec_caps_stat;          /*!< A2DP source received sink codec capabilities */
 
@@ -747,6 +803,8 @@ esp_err_t esp_a2d_source_connect(esp_bd_addr_t remote_bda);
  *
  */
 esp_err_t esp_a2d_source_disconnect(esp_bd_addr_t remote_bda);
+
+size_t esp_a2d_source_audio_queue_len(void);
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,9 @@
 #define LOGF_ENABLE
 #include "action.h"
+#include "asm/thread.h"
+#include "bluetooth/codecs.h"
 #include "bt_hci.h"
+#include "btc_av.h"
 #include "button.h"
 #include "esp_a2dp_api.h"
 #include "esp_avrc_api.h"
@@ -17,7 +20,10 @@
 #include "queue.h"
 #include "semaphore.h"
 #include "splash.h"
+#include "stack/a2d_api.h"
+#include "stack/a2d_sbc.h"
 #include "system.h"
+#include "thread.h"
 #include "tick.h"
 #include "tlsf.h"
 #include "misc.h"
@@ -39,10 +45,20 @@ typedef struct {
 
 static bt_list_entry_t bt_entries[BT_MAX_ENTRIES + 1];
 
+static struct a2dp_codec *current_codec = NULL;
+
+#define NUM_CODECS 4
+
+static struct a2dp_codec *codec_list[NUM_CODECS] = {
+    &a2dp_codec_ldac,
+    &a2dp_codec_aptx_hd,
+    &a2dp_codec_aptx,
+    &a2dp_codec_sbc,
+};
+
 static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param);
 static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param);
 static void bt_app_avrc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t *param);
-static int32_t bt_app_a2d_data_cb(uint8_t *buf, int32_t len);
 
 void bluetooth_enable_discover(void)
 {
@@ -51,6 +67,7 @@ void bluetooth_enable_discover(void)
         splashf(0, "Enabling bluetooth...");
         bt_hci_enable();
         esp_bluedroid_config_t cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
+        cfg.sc_en = true;
         if ((ret = esp_bluedroid_init_with_cfg(&cfg)) != ESP_OK) {
             panicf("%s initialize bluedroid failed: %d", __func__, ret);
         }
@@ -113,8 +130,19 @@ void bluetooth_enable_discover(void)
         if ((ret = esp_a2d_register_callback(bt_app_a2d_cb)) != ESP_OK) {
             panicf("%s a2dp register callback failed: %d", __func__, ret);
         }
-        if ((ret = esp_a2d_source_register_data_callback(bt_app_a2d_data_cb)) != ESP_OK) {
-            panicf("%s a2dp register data callback failed: %d", __func__, ret);
+        esp_a2d_mcc_t mcc;
+        mcc.losc = A2D_SBC_INFO_LEN;
+        mcc.media_type = A2D_MEDIA_TYPE_AUDIO;
+        mcc.codec_type = ESP_A2D_MCT_SBC;
+        mcc.cie.sbc_info.samp_freq    = ESP_A2D_SBC_CIE_SF_44K | ESP_A2D_SBC_CIE_SF_48K;
+        mcc.cie.sbc_info.ch_mode      = ESP_A2D_SBC_CIE_CH_MODE_JOINT_STEREO;
+        mcc.cie.sbc_info.block_len    = ESP_A2D_SBC_CIE_BLOCK_LEN_16;
+        mcc.cie.sbc_info.num_subbands = ESP_A2D_SBC_CIE_NUM_SUBBANDS_8;
+        mcc.cie.sbc_info.alloc_mthd   = ESP_A2D_SBC_CIE_ALLOC_MTHD_LOUDNESS;
+        mcc.cie.sbc_info.min_bitpool  = 3;
+        mcc.cie.sbc_info.max_bitpool  = 53;
+        if ((ret = esp_a2d_source_register_stream_endpoint(0, &mcc)) != ESP_OK) {
+            panicf("%s a2dp register stream endpoint failed: %d", __func__, ret);
         }
         if ((ret = esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE)) != ESP_OK) {
             panicf("%s set scan mode failed: %d", __func__, ret);
@@ -351,6 +379,29 @@ const char * bt_heap_info_getname(int selected_item, void * data, char * buffer,
                 return "MAC addr: unknown";
             }
         }
+        case 2:
+            if (current_codec == &a2dp_codec_ldac) {
+                return "current codec: LDAC";
+            } else if (current_codec == &a2dp_codec_aptx_hd) {
+                return "current codec: aptX HD";
+            } else if (current_codec == &a2dp_codec_aptx) {
+                return "current codec: aptX";
+            } else if (current_codec == &a2dp_codec_sbc) {
+                return "current codec: SBC";
+            } else {
+                return "current codec: unknown";
+            }
+        case 3:
+            if (current_codec != NULL && current_codec->debug_info != NULL) {
+                strcpy(buffer, "codec info: ");
+                current_codec->debug_info(buffer + 12, buffer_len - 12);
+                return buffer;
+            } else {
+                return "codec info: N/A";
+            }
+        case 4:
+            snprintf(buffer, buffer_len, "real sink sampr: %lu", pcm_current_sink_caps()->samprs[pcm_get_current_sink()->configured_freq]);
+            return buffer;
         default:
             return "Unknown item!!";
     }
@@ -360,11 +411,44 @@ bool bt_heap_info(void)
 {
     struct simplelist_info info;
 
-    simplelist_info_init(&info, "Bluetooth debug info:", 2, NULL);
+    simplelist_info_init(&info, "Bluetooth debug info:", 5, NULL);
     info.scroll_all = false;
     info.action_callback = bt_heap_info_action_callback;
     info.get_name = bt_heap_info_getname;
     return simplelist_show_list(&info);
+}
+
+static esp_a2d_audio_state_t bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
+
+uint32_t bt_codec_stack[DEFAULT_STACK_SIZE / sizeof(uint32_t)];
+
+
+static void bt_codec_task(void)
+{
+    int64_t next_ms = (((int64_t)current_tick) * 1000) / HZ;
+    while (esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED && bt_current_state == ESP_A2D_AUDIO_STATE_STARTED) {
+        uint64_t ticked = 0;
+        do {
+            if (ticked > (1000 / HZ)) {
+                ticked %= (1000 / HZ);
+                yield();
+            }
+            if (current_codec == NULL) {
+                thread_exit();
+                return;
+            }
+            current_codec->tick();
+            next_ms += current_codec->get_period();
+            ticked += current_codec->get_period();
+        } while ((next_ms * HZ) / 1000 <= current_tick);
+        sleep(((next_ms * HZ) / 1000) - current_tick);
+    }
+    if (current_codec == NULL) {
+        thread_exit();
+        return;
+    }
+    current_codec->feeding_flush();
+    thread_exit();
 }
 
 static esp_a2d_conn_hdl_t conn_hdl;
@@ -372,6 +456,8 @@ static bool sampr_switch_ongoing = false;
 static struct semaphore sink_control_sem;
 static struct event_queue sink_control_queue;
 static esp_a2d_mcc_t new_pref_mcc;
+struct pcm_sink bt_pcm_sink;
+static esp_a2d_mcc_t peer_caps;
 
 static int sink_suspended = 1;
 
@@ -409,10 +495,15 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                 queue_init(&sink_control_queue, false);
                 sink_suspended = 1;
                 sampr_switch_ongoing = false;
-                esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
+                bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
                 esp_bt_gap_read_remote_name(param->conn_stat.remote_bda);
             } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED || param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTING) {
-                pcm_switch_sink(PCM_SINK_BUILTIN);
+                if (current_codec != NULL) {
+                    bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
+                    current_codec->deinit();
+                    current_codec = NULL;
+                    pcm_switch_sink(PCM_SINK_BUILTIN);
+                }
             }
             return;
         case ESP_A2D_MEDIA_CTRL_ACK_EVT:
@@ -421,6 +512,13 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                 pcm_switch_sink(PCM_SINK_BLUETOOTH);
             } else if (sampr_switch_ongoing && param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_SUSPEND) {
                 esp_a2d_source_set_pref_mcc(conn_hdl, &new_pref_mcc);
+            }
+            if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_SUSPEND && param->media_ctrl_stat.status == ESP_A2D_MEDIA_CTRL_ACK_SUCCESS) {
+                bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
+            } else if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_START && param->media_ctrl_stat.status == ESP_A2D_MEDIA_CTRL_ACK_SUCCESS) {
+                bt_current_state = ESP_A2D_AUDIO_STATE_STARTED;
+                current_codec->feeding_reset();
+                create_thread(bt_codec_task, bt_codec_stack, DEFAULT_STACK_SIZE, 0, "bt_codec" IF_PRIO(, PRIORITY_BLUETOOTH));
             }
             struct queue_event ev;
             queue_wait_w_tmo(&sink_control_queue, &ev, TIMEOUT_NOBLOCK);
@@ -431,25 +529,41 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
             }
             return;
         case ESP_A2D_REPORT_SNK_CODEC_CAPS_EVT: {
-            logf("a2d %d %d", event, param->a2d_report_snk_codec_caps_stat.mcc.type);
-            esp_a2d_mcc_t *sink_mcc = &param->a2d_report_snk_codec_caps_stat.mcc;
-            if (sink_mcc->type == ESP_A2D_MCT_SBC) {
-                esp_a2d_mcc_t pref_mcc;
-                pref_mcc.type = ESP_A2D_MCT_SBC;
-                pref_mcc.cie.sbc_info.samp_freq    = ESP_A2D_SBC_CIE_SF_44K;
-                pref_mcc.cie.sbc_info.ch_mode      = ESP_A2D_SBC_CIE_CH_MODE_JOINT_STEREO;
-                pref_mcc.cie.sbc_info.block_len    = ESP_A2D_SBC_CIE_BLOCK_LEN_16;
-                pref_mcc.cie.sbc_info.num_subbands = ESP_A2D_SBC_CIE_NUM_SUBBANDS_8;
-                pref_mcc.cie.sbc_info.alloc_mthd   = ESP_A2D_SBC_CIE_ALLOC_MTHD_LOUDNESS;
-                pref_mcc.cie.sbc_info.min_bitpool  = 3;
-                pref_mcc.cie.sbc_info.max_bitpool  = 53;
+            esp_a2d_mcc_t pref_mcc;
+            struct a2dp_peer_info peer_info = {
+                .peer_mtu = param->a2d_report_snk_codec_caps_stat.mtu,
+                .peer_caps = &peer_caps,
+                .conn_hdl = param->a2d_report_snk_codec_caps_stat.conn_hdl,
+                .is_edr = btc_av_is_peer_edr(),
+            };
+            conn_hdl = param->a2d_report_snk_codec_caps_stat.conn_hdl;
+            current_codec->init(&bt_pcm_sink.caps, &peer_info, &pref_mcc);
+            esp_err_t ret = esp_a2d_source_set_pref_mcc(param->a2d_report_snk_codec_caps_stat.conn_hdl, &pref_mcc);
 
-                conn_hdl = param->a2d_report_snk_codec_caps_stat.conn_hdl;
-                esp_err_t ret = esp_a2d_source_set_pref_mcc(param->a2d_report_snk_codec_caps_stat.conn_hdl, &pref_mcc);
-
-                if (ret != ESP_OK) {
-                    panicf("%s a2dp source set pref mcc failed: %d", __func__, ret);
+            if (ret != ESP_OK) {
+                panicf("%s a2dp source set pref mcc failed: %d", __func__, ret);
+            }
+            break;
+        }
+        case ESP_A2D_REPORT_SNK_ALL_CODEC_CAPS_EVT: {
+            logf("a2d %d %d", event, param->a2d_report_snk_all_codec_caps_stat.sep_num);
+            bool done = false;
+            for (int codec_idx = 0; codec_idx < NUM_CODECS; codec_idx++) {
+                current_codec = codec_list[codec_idx];
+                for (uint32_t i = 0; i < param->a2d_report_snk_all_codec_caps_stat.sep_num; i++) {
+                    esp_a2d_mcc_t *sink_mcc = &param->a2d_report_snk_all_codec_caps_stat.sep_mcc[i].mcc;
+                    if (current_codec->is_acceptable(sink_mcc)) {
+                        memcpy(&peer_caps, sink_mcc, sizeof(esp_a2d_mcc_t));
+                        done = true;
+                        break;
+                    }
                 }
+                if (done) {
+                    break;
+                }
+            }
+            if (!done) { 
+                panicf("Unable to initialize suitable codec");
             }
             break;
         }
@@ -459,10 +573,14 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                 sampr_switch_ongoing = false;
                 logf("starting playback: sampr switch done");
                 bt_sink_resume();
+            } else {
+                esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
             }
             return;
+        case ESP_A2D_AUDIO_STATE_EVT:
+            logf("a2d %d %d\n", event, param->audio_stat.state);
         default:
-            logf("a2d %d", event);
+            logf("a2d %d\n", event);
         return;
     }
 }
@@ -510,21 +628,10 @@ static void bt_app_avrc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param
     }
 }
 
-const unsigned long bt_freq_sampr[2] =
-{
-    SAMPR_44,
-    SAMPR_48,
-};
-
-const uint8_t bt_freq_sampr_cie[2] =
-{
-    ESP_A2D_SBC_CIE_SF_44K,
-    ESP_A2D_SBC_CIE_SF_48K,
-};
-
 static const void *pcm_data_start = NULL;
 static size_t  pcm_data_size = 0;
 static int     audio_locked = 0;
+struct pcm_sink bt_pcm_sink;
 
 void bt_sink_init(void) {
 }
@@ -545,16 +652,10 @@ void bt_sink_set_freq(uint16_t freq) {
 
     logf("suspending playback: sampr switch start, to %d", freq);
 
-    new_pref_mcc.type = ESP_A2D_MCT_SBC;
-    new_pref_mcc.cie.sbc_info.samp_freq    = bt_freq_sampr_cie[freq];
-    new_pref_mcc.cie.sbc_info.ch_mode      = ESP_A2D_SBC_CIE_CH_MODE_JOINT_STEREO;
-    new_pref_mcc.cie.sbc_info.block_len    = ESP_A2D_SBC_CIE_BLOCK_LEN_16;
-    new_pref_mcc.cie.sbc_info.num_subbands = ESP_A2D_SBC_CIE_NUM_SUBBANDS_8;
-    new_pref_mcc.cie.sbc_info.alloc_mthd   = ESP_A2D_SBC_CIE_ALLOC_MTHD_LOUDNESS;
-    new_pref_mcc.cie.sbc_info.min_bitpool  = 3;
-    new_pref_mcc.cie.sbc_info.max_bitpool  = 53;
+    bt_sink_suspend();
+    current_codec->set_freq(bt_pcm_sink.caps.samprs[freq], &new_pref_mcc);
 
-    if (!bt_sink_suspend()) {
+    if (bt_current_state == ESP_A2D_AUDIO_STATE_SUSPEND) {
         esp_a2d_source_set_pref_mcc(conn_hdl, &new_pref_mcc);
     }
 }
@@ -582,7 +683,7 @@ static bool get_new_buf_maybe(void) {
     return ret;
 }
 
-static int32_t bt_app_a2d_data_cb(uint8_t *buf, int32_t len) {
+size_t bt_read_pcm(uint8_t *buf, size_t len) {
     if (len <= 0 || buf == NULL) {
         return 0;
     }
@@ -607,10 +708,10 @@ static int32_t bt_app_a2d_data_cb(uint8_t *buf, int32_t len) {
 
 struct pcm_sink bt_pcm_sink = {
     .caps = {
-        .samprs       = bt_freq_sampr,
-        .num_samprs   = 2,
-        .default_freq = 0,
-        .volume_type  = PCM_SINK_HWVOL,
+        .samprs       = NULL,
+        .num_samprs   = -1,
+        .default_freq = -1,
+        .volume_type  = -1,
     },
     .ops = {
         .init     = bt_sink_init,

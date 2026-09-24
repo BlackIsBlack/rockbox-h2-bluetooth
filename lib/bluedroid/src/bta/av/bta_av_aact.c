@@ -2239,7 +2239,7 @@ void bta_av_data_path (tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
     UINT32  data_len;
     UINT32  timestamp;
     BOOLEAN new_buf = FALSE;
-    UINT8   m_pt = 0x60 | p_scb->codec_type;
+    UINT8   m_pt = 0x60;
     tAVDT_DATA_OPT_MASK     opt;
     UNUSED(p_data);
 
@@ -2284,7 +2284,7 @@ void bta_av_data_path (tBTA_AV_SCB *p_scb, tBTA_AV_DATA *p_data)
 
             /* opt is a bit mask, it could have several options set */
             opt = AVDT_DATA_OPT_NONE;
-            if (p_scb->no_rtp_hdr) {
+            if (p_scb->no_rtp_hdr || p_buf->layer_specific == 0xFF) {
                 opt |= AVDT_DATA_OPT_NO_RTP;
             }
 

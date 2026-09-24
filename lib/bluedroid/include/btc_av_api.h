@@ -31,9 +31,10 @@ extern "C" {
  *****************************************************************************/
 
 /* Codec type */
-#define BTC_AV_CODEC_NONE       0xFF
+#define BTC_AV_CODEC_NONE       0xFE
 #define BTC_AV_CODEC_SBC        A2D_MEDIA_CT_SBC        /* SBC media codec type */
 #define BTC_AV_CODEC_M24        A2D_MEDIA_CT_M24        /* M24 media codec type */
+#define BTC_AV_CODEC_NON_A2DP   A2D_MEDIA_CT_NON_A2DP   /* Vendor specific media codec type */
 
 #define BTC_AV_CODEC_PCM        0x5                     /* Raw PCM */
 

@@ -253,4 +253,13 @@ BOOLEAN btc_a2dp_source_set_pref_mcc(tBTA_AV_HNDL hndl, tBTC_AV_CODEC_INFO *pref
     return bta_av_co_audio_set_pref_mcc(hndl, pref_mcc);
 }
 
+size_t esp_a2d_source_audio_queue_len(void) {
+    if (btc_a2dp_source_state != BTC_A2DP_SOURCE_STATE_ON) {
+        APPL_TRACE_WARNING("%s source not start up", __func__);
+        return 0;
+    }
+
+    return fixed_queue_length(a2dp_source_local_param.audio_tx_q);
+}
+
 #endif /* (BTC_AV_SRC_INCLUDED == TRUE) && (BTC_AV_EXT_CODEC == TRUE) */

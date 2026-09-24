@@ -15,15 +15,7 @@
 **  Constants & Macros
 ********************************************************************************/
 
-enum {
-    BTC_SV_AV_AA_SBC_INDEX = 0,
-    BTC_SV_AV_AA_SBC_SINK_INDEX,
-#if (BTC_AV_CODEC_AAC_INCLUDED == TRUE)
-    BTC_SV_AV_AA_M24_INDEX,
-    BTC_SV_AV_AA_M24_SINK_INDEX,
-#endif
-    BTC_SV_AV_AA_SEP_INDEX  /* Last index */
-};
+#define BTC_SV_AV_AA_SEP_INDEX 16
 
 /*****************************************************************************
 **  Local data

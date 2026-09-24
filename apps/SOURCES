@@ -188,6 +188,10 @@ keymaps/keymap-touchscreen.c
 #endif
 #ifdef HAVE_BLUETOOTH
 bluetooth/bt.c
+bluetooth/codecs/sbc.c
+bluetooth/codecs/ldac.c
+bluetooth/codecs/aptx.c
+bluetooth/codecs/aptx_hd.c
 #endif
 #if (CONFIG_KEYPAD == IRIVER_H100_PAD) \
     || (CONFIG_KEYPAD == IRIVER_H300_PAD)
