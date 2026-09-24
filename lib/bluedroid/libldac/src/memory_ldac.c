@@ -46,7 +46,7 @@ size_t size)
         p_sfinfo->p_mempos += nmemb * align_ldac(size);
     }
     else {
-        p_tmp = calloc(nmemb, size);
+        p_tmp = osi_calloc(nmemb * size);
     }
 
     return (void *)p_tmp;

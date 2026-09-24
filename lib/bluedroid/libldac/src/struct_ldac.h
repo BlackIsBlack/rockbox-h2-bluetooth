@@ -22,6 +22,9 @@
 #include <string.h>
 #include <math.h>
 
+#define _BT_COMMON_H_ // ugly hack to prevent bt_common pollution
+#include "osi/allocator.h"
+
 /***************************************************************************************************
     Macro Definition
 ***************************************************************************************************/

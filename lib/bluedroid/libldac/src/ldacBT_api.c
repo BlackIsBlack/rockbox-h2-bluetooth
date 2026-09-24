@@ -30,7 +30,7 @@ LDACBT_API int ldacBT_get_version( void )
 LDACBT_API HANDLE_LDAC_BT ldacBT_get_handle( void )
 {
     HANDLE_LDAC_BT hLdacBT;
-    hLdacBT = (HANDLE_LDAC_BT)malloc( sizeof(STRUCT_LDACBT_HANDLE) );
+    hLdacBT = (HANDLE_LDAC_BT)osi_malloc( sizeof(STRUCT_LDACBT_HANDLE) );
     if( hLdacBT == NULL ){ return NULL; }
 
     /* Get ldaclib Handler */
@@ -58,7 +58,7 @@ LDACBT_API void ldacBT_free_handle( HANDLE_LDAC_BT hLdacBT )
         hLdacBT->hLDAC = NULL;
     }
     /* free ldacbt handle */
-    free( hLdacBT );
+    osi_free( hLdacBT );
 }
 
 /* Close LDAC handle */

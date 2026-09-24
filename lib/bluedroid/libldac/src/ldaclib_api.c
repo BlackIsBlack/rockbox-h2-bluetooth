@@ -295,7 +295,7 @@ void)
 {
     HANDLE_LDAC hData;
 
-    hData = (HANDLE_LDAC)malloc(sizeof(HANDLE_LDAC_STRUCT));
+    hData = (HANDLE_LDAC)osi_malloc(sizeof(HANDLE_LDAC_STRUCT));
     if (hData != (HANDLE_LDAC)NULL) {
         clear_data_ldac(hData, sizeof(HANDLE_LDAC_STRUCT));
         hData->sfinfo.p_mempos = (char *)NULL;
@@ -316,7 +316,7 @@ HANDLE_LDAC hData)
             return LDAC_S_OK;
         }
 
-        free(hData);
+        osi_free(hData);
     }
 
     return LDAC_S_OK;

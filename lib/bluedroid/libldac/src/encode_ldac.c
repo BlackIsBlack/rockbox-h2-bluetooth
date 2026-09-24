@@ -148,7 +148,7 @@ SFINFO *p_sfinfo)
 
     /* Free AB */
     if (p_sfinfo->p_ab != (AB *)NULL) {
-        free(p_sfinfo->p_ab);
+        osi_free(p_sfinfo->p_ab);
         p_sfinfo->p_ab = (AB *)NULL;
     }
 
@@ -156,10 +156,10 @@ SFINFO *p_sfinfo)
     for (ich = 0; ich < nchs; ich++) {
         if (p_sfinfo->ap_ac[ich] != (AC *)NULL) {
             if (p_sfinfo->ap_ac[ich]->p_acsub != (ACSUB *)NULL) {
-                free(p_sfinfo->ap_ac[ich]->p_acsub);
+                osi_free(p_sfinfo->ap_ac[ich]->p_acsub);
                 p_sfinfo->ap_ac[ich]->p_acsub = (ACSUB *)NULL;
             }
-            free(p_sfinfo->ap_ac[ich]);
+            osi_free(p_sfinfo->ap_ac[ich]);
             p_sfinfo->ap_ac[ich] = (AC *)NULL;
         }
     }

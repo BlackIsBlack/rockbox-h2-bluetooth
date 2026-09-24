@@ -19,6 +19,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define _BT_COMMON_H_ // ugly hack to prevent bt_common pollution
+#include "osi/allocator.h"
+
 #define LDAC_ABR_OBSERVING_TIME_MS 500 /* [ms] the time length for storing Tx Queue Depth */
 #define LDAC_ABR_PENALTY_MAX 4
 
@@ -97,7 +100,7 @@ HANDLE_LDAC_ABR ldac_ABR_get_handle(void)
 {
     HANDLE_LDAC_ABR hLdacAbr;
     ABRDBG( "" );
-    if ((hLdacAbr = (HANDLE_LDAC_ABR)malloc(sizeof(LDAC_ABR_PARAMS))) == NULL) {
+    if ((hLdacAbr = (HANDLE_LDAC_ABR)osi_malloc(sizeof(LDAC_ABR_PARAMS))) == NULL) {
         ABRDBG( "[ERR] Failed to allocate memory for handle." );
         return NULL;
     }
@@ -111,9 +114,9 @@ void ldac_ABR_free_handle(HANDLE_LDAC_ABR hLdacAbr)
     ABRDBG( "" );
     if (hLdacAbr != NULL) {
         if (hLdacAbr->TxQD_Info.pHist) {
-            free(hLdacAbr->TxQD_Info.pHist);
+            osi_free(hLdacAbr->TxQD_Info.pHist);
         }
-        free(hLdacAbr);
+        osi_free(hLdacAbr);
     }
 }
 
@@ -130,9 +133,9 @@ int ldac_ABR_Init( HANDLE_LDAC_ABR hLdacAbr, unsigned int interval_ms )
     hLdacAbr->TxQD_Info.cnt = 0;
     hLdacAbr->TxQD_Info.idx = 0;
     hLdacAbr->TxQD_Info.szHist = hLdacAbr->numToEvaluate + 1;
-    if (hLdacAbr->TxQD_Info.pHist) free(hLdacAbr->TxQD_Info.pHist);
+    if (hLdacAbr->TxQD_Info.pHist) osi_free(hLdacAbr->TxQD_Info.pHist);
     if ((hLdacAbr->TxQD_Info.pHist =
-            (unsigned char*)malloc(hLdacAbr->TxQD_Info.szHist * sizeof(unsigned char))) == NULL){
+            (unsigned char*)osi_malloc(hLdacAbr->TxQD_Info.szHist * sizeof(unsigned char))) == NULL){
         return -1;
     }
     clear_data(hLdacAbr->TxQD_Info.pHist, hLdacAbr->TxQD_Info.szHist * sizeof(unsigned char));

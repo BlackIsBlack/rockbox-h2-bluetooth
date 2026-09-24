@@ -36,7 +36,7 @@
 #define XBT_INLINE_ static inline
 #define _STDQMFOUTERCOEFF 1
 #elif defined __GNUC__
-#define XBT_INLINE_ inline
+#define XBT_INLINE_ static inline
 #define _STDQMFOUTERCOEFF 1
 #else
 #define XBT_INLINE_ static

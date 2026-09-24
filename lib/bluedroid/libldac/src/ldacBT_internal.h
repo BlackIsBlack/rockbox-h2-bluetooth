@@ -20,8 +20,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <unistd.h>
 #include "struct_ldac.h"
+
+#define _BT_COMMON_H_ // ugly hack to prevent bt_common pollution
+#include "osi/allocator.h"
 
 #ifdef    __cplusplus
 extern "C" {
