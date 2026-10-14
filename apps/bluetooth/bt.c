@@ -17,6 +17,7 @@
 #include "pcm-internal.h"
 #include "pcm.h"
 #include "pcm_sink.h"
+#include "pcm_sw_volume.h"
 #include "queue.h"
 #include "semaphore.h"
 #include "splash.h"
@@ -825,6 +826,7 @@ size_t bt_read_pcm(uint8_t *buf, size_t len) {
         while (len > 0 && (pcm_data_size > 0 || get_new_buf_maybe())) {
             size_t sent = MIN(pcm_data_size, len);
             memcpy(buf, pcm_data_start, sent);
+            pcm_scale_buffer_16((int16_t *)buf, sent); /* BT volume */
             pcm_data_start += sent;
             pcm_data_size -= sent;
             buf += sent;
