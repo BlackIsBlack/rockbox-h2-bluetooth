@@ -199,8 +199,9 @@ void bluetooth_hci_task(void)
     }
 }
 
-void bt_hci_enable(void)
+bool bt_hci_enable(bool capture)
 {
+    (void)capture;
     controller_fd = socket(PF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI);
     struct sockaddr_hci addr;
     memset(&addr, 0, sizeof(addr));
@@ -224,6 +225,7 @@ void bt_hci_enable(void)
     };
     esp_bluedroid_attach_hci_driver(&operations);
     create_thread(bluetooth_hci_task, hci_stack, (DEFAULT_STACK_SIZE + HCI_RECV_BUF_SIZE), 0, "bt_hci" IF_PRIO(, PRIORITY_BLUETOOTH));
+    return true;
 }
 
 void bt_hci_log_stop_after(int packets)

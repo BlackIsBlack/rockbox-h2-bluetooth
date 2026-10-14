@@ -22,9 +22,13 @@
 #ifndef BT_HCI_H
 #define BT_HCI_H
 
+#include <stdbool.h>
+
 // Enables and registers the HCI driver for the target.
-// Can spawn up to one thread for this.
-void bt_hci_enable(void);
+// Can spawn up to one thread for this. Returns false if the controller
+// could not be brought up (nothing is left running then).
+// capture: write an HCI packet capture (debug logging).
+bool bt_hci_enable(bool capture);
 
 // Disables the HCI driver for the target.
 // If bt_hci_enable spawned any threads, they must exit now.

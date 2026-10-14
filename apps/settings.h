@@ -897,6 +897,10 @@ struct user_settings
 #ifdef HAVE_BLUETOOTH
     bool bt_on_startup;     /* enable Bluetooth at boot */
     bool bt_show_icon;      /* Bluetooth icon in status bar / %Bt */
+    bool bt_debug_log;      /* bt_log.txt + bt_hci.pcap */
+    int bt_auto_off;        /* minutes without a connection, 0 = never */
+    int bt_codec;           /* 0 auto, 1 LDAC, 2 aptX HD, 3 aptX, 4 SBC */
+    int bt_ldac_quality;    /* 0 adaptive, 1 990, 2 660, 3 330 kbps */
 #endif
 
     char start_directory[MAX_PATHNAME+1];

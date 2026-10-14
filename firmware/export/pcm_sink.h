@@ -43,6 +43,9 @@ struct pcm_sink_ops {
     void (*unlock)(void);
     void (*play)(const void* addr, size_t size);
     void (*stop)(void);
+    /* optional: volume handled by the sink (centibels), e.g. Bluetooth
+     * absolute volume. NULL = software volume. */
+    void (*set_volume)(int vol_l, int vol_r);
 };
 
 struct pcm_sink {

@@ -31,6 +31,7 @@
 #include "tick.h"
 #include "tlsf.h"
 #include "misc.h"
+#include "sound.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -55,6 +56,8 @@ static long bt_log_size;
 
 void bt_log(const char *fmt, ...)
 {
+    if (!global_settings.bt_debug_log)
+        return;
     /* static: Bluedroid threads that log only have ~3 KiB of stack */
     static char buf[256];
     mutex_lock(&bt_log_mutex);
@@ -129,6 +132,9 @@ static esp_bd_addr_t bt_target_addr;   /* device we last tried to connect */
 static char bt_target_name[BT_MAX_NAME_LEN];
 static bool bt_connected;
 static int bt_batt_pct = -1; /* connected headphones' battery, -1 = unknown */
+static volatile long bt_idle_since; /* for Auto Off When Idle */
+static volatile bool bt_abs_vol;     /* headphones control the volume */
+static volatile int bt_abs_vol_sent = -1; /* last 0..127 value exchanged */
 
 static const char *bt_codec_name(void)
 {
@@ -261,117 +267,120 @@ static void bt_app_hf_cb(esp_hf_cb_event_t event, esp_hf_cb_param_t *param)
     }
 }
 
-static void bt_enable(bool quiet)
+static void bt_app_avrc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param);
+
+/* Bring the stack up. If any step fails, tear it all down again, show a
+ * message (unless quiet) and return false. Never panics. */
+static bool bt_enable(bool quiet)
 {
-    esp_err_t ret;
+    esp_err_t ret = ESP_OK;
+    const char *what = NULL;
+#define BT_TRY(call, step) do { if ((ret = (call)) != ESP_OK) { what = (step); goto fail; } } while (0)
+
     mutex_lock(&bt_power_mutex);
-    if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
-        if (!quiet)
-            splashf(0, "Enabling bluetooth...");
-        bt_log("--- enabling bluetooth ---");
-        bt_hci_enable();
-        esp_bluedroid_config_t cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
-        cfg.sc_en = true;
-        if ((ret = esp_bluedroid_init_with_cfg(&cfg)) != ESP_OK) {
-            panicf("%s initialize bluedroid failed: %d", __func__, ret);
-        }
-        if ((ret = esp_bluedroid_enable()) != ESP_OK) {
-            panicf("%s enable bluedroid failed: %d", __func__, ret);
-        }
-        esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
-        esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
-        if ((ret = esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t))) != ESP_OK) {
-            panicf("%s set security param failed: %d", __func__, ret);
-        }
-        esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_VARIABLE;
-        esp_bt_pin_code_t pin_code;
-        esp_bt_gap_set_pin(pin_type, 0, pin_code);
-        if ((ret = esp_bt_gap_register_callback(bt_app_gap_cb)) != ESP_OK) {
-            panicf("%s set gap cb failed: %d", __func__, ret);
-        }
-        char device_name[32] = "Rockbox";
-        int fd = open_utf8(ROCKBOX_DIR "/playername.txt", O_RDONLY);
-        if (fd >= 0) {
-            read_line(fd, device_name, sizeof(device_name));
-            close(fd);
-            device_name[sizeof(device_name)-1] = 0;
-        }
-        if ((ret = esp_bt_gap_set_device_name(device_name)) != ESP_OK) {
-            panicf("%s set device name failed: %d", __func__, ret);
-        }
-        if ((ret = esp_avrc_tg_init()) != ESP_OK) {
-            panicf("%s avrcp tg init failed: %d", __func__, ret);
-        }
-        if ((ret = esp_avrc_tg_register_callback(bt_app_avrc_tg_cb)) != ESP_OK) {
-            panicf("%s avrcp tg init failed: %d", __func__, ret);
-        }
-
-        esp_avrc_psth_bit_mask_t psth = {0};
-        esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_PLAY);
-        esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_PAUSE);
-        esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_STOP);
-        esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_FORWARD);
-        esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_BACKWARD);
-        esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_FAST_FORWARD);
-        esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_REWIND);
-        ret = esp_avrc_tg_set_psth_cmd_filter(ESP_AVRC_PSTH_FILTER_SUPPORTED_CMD,
-                                                &psth);
-        if (ret != ESP_OK) {
-            panicf("%s avrcp tg init failed: %d", __func__, ret);
-        }
-
-        /* Headphones need our play status for in-ear detection to
-         * send pause/play */
-        esp_avrc_rn_evt_cap_mask_t evt_set = {0};
-        esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set,
-                                            ESP_AVRC_RN_PLAY_STATUS_CHANGE);
-        ret = esp_avrc_tg_set_rn_evt_cap(&evt_set);
-        if (ret != ESP_OK) /* nice to have, never fatal */
-            bt_log("avrcp: play status notifications unavailable (%d)", ret);
-
-        if ((ret = esp_a2d_source_init()) != ESP_OK) {
-            panicf("%s a2dp source init failed: %d", __func__, ret);
-        }
-        if ((ret = esp_a2d_register_callback(bt_app_a2d_cb)) != ESP_OK) {
-            panicf("%s a2dp register callback failed: %d", __func__, ret);
-        }
-        esp_a2d_mcc_t mcc;
-        mcc.losc = A2D_SBC_INFO_LEN;
-        mcc.media_type = A2D_MEDIA_TYPE_AUDIO;
-        mcc.codec_type = ESP_A2D_MCT_SBC;
-        mcc.cie.sbc_info.samp_freq    = ESP_A2D_SBC_CIE_SF_44K | ESP_A2D_SBC_CIE_SF_48K;
-        mcc.cie.sbc_info.ch_mode      = ESP_A2D_SBC_CIE_CH_MODE_JOINT_STEREO;
-        mcc.cie.sbc_info.block_len    = ESP_A2D_SBC_CIE_BLOCK_LEN_16;
-        mcc.cie.sbc_info.num_subbands = ESP_A2D_SBC_CIE_NUM_SUBBANDS_8;
-        mcc.cie.sbc_info.alloc_mthd   = ESP_A2D_SBC_CIE_ALLOC_MTHD_LOUDNESS;
-        mcc.cie.sbc_info.min_bitpool  = 3;
-        mcc.cie.sbc_info.max_bitpool  = 53;
-        if ((ret = esp_a2d_source_register_stream_endpoint(0, &mcc)) != ESP_OK) {
-            panicf("%s a2dp register stream endpoint failed: %d", __func__, ret);
-        }
-        if ((ret = esp_hf_ag_register_callback(bt_app_hf_cb)) != ESP_OK
-            || (ret = esp_hf_ag_init()) != ESP_OK)
-            bt_log("hfp: headphone battery unavailable (%d)", ret);
-        if ((ret = esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE)) != ESP_OK) {
-            panicf("%s set scan mode failed: %d", __func__, ret);
-        }
-        esp_bd_addr_t bonded_addrs[BT_MAX_ENTRIES];
-        int num_bonded_addrs = BT_MAX_ENTRIES;
-        esp_bt_gap_get_bond_device_list(&num_bonded_addrs, bonded_addrs);
-        for (int i = 0; i < num_bonded_addrs; i++) {
-            memcpy(bt_entries[i].addr, (bonded_addrs + i), ESP_BD_ADDR_LEN);
-            size_t len = BT_MAX_NAME_LEN - 1;
-            if (esp_bt_gap_get_bond_device_property(bt_entries[i].addr, "RbDeviceName", bt_entries[i].name, &len) == ESP_OK) {
-                bt_entries[i].name[len] = 0;
-            } else {
-                strncpy(bt_entries[i].name, "Unknown Paired Device", BT_MAX_NAME_LEN);
-            }
-            bt_entries[i].rssi = -128;
-            bt_entries[i].valid = true;
-        }
-        bt_entries[num_bonded_addrs].valid = false;
+    if (esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED) {
+        mutex_unlock(&bt_power_mutex);
+        return true;
     }
+    if (!quiet)
+        splashf(0, "Enabling bluetooth...");
+    bt_log("--- enabling bluetooth ---");
+    bt_idle_since = current_tick;
+    if (!bt_hci_enable(global_settings.bt_debug_log)) {
+        ret = ESP_FAIL;
+        what = "controller";
+        goto fail;
+    }
+    esp_bluedroid_config_t cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
+    cfg.sc_en = true;
+    BT_TRY(esp_bluedroid_init_with_cfg(&cfg), "stack init");
+    BT_TRY(esp_bluedroid_enable(), "stack enable");
+    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
+    BT_TRY(esp_bt_gap_set_security_param(ESP_BT_SP_IOCAP_MODE, &iocap, sizeof(uint8_t)), "security");
+    esp_bt_pin_code_t pin_code;
+    esp_bt_gap_set_pin(ESP_BT_PIN_TYPE_VARIABLE, 0, pin_code);
+    BT_TRY(esp_bt_gap_register_callback(bt_app_gap_cb), "gap");
+    char device_name[32] = "Rockbox";
+    int fd = open_utf8(ROCKBOX_DIR "/playername.txt", O_RDONLY);
+    if (fd >= 0) {
+        read_line(fd, device_name, sizeof(device_name));
+        close(fd);
+        device_name[sizeof(device_name)-1] = 0;
+    }
+    BT_TRY(esp_bt_gap_set_device_name(device_name), "device name");
+    BT_TRY(esp_avrc_tg_init(), "avrcp tg");
+    BT_TRY(esp_avrc_tg_register_callback(bt_app_avrc_tg_cb), "avrcp tg");
+
+    esp_avrc_psth_bit_mask_t psth = {0};
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_PLAY);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_PAUSE);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_STOP);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_FORWARD);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_BACKWARD);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_FAST_FORWARD);
+    esp_avrc_psth_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &psth, ESP_AVRC_PT_CMD_REWIND);
+    BT_TRY(esp_avrc_tg_set_psth_cmd_filter(ESP_AVRC_PSTH_FILTER_SUPPORTED_CMD, &psth), "avrcp tg");
+
+    /* the rest is nice to have: log, never fail */
+    /* Headphones need our play status for in-ear detection */
+    esp_avrc_rn_evt_cap_mask_t evt_set = {0};
+    esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set,
+                                        ESP_AVRC_RN_PLAY_STATUS_CHANGE);
+    if ((ret = esp_avrc_tg_set_rn_evt_cap(&evt_set)) != ESP_OK)
+        bt_log("avrcp: play status notifications unavailable (%d)", ret);
+    /* controller role: absolute volume */
+    if ((ret = esp_avrc_ct_init()) != ESP_OK
+        || (ret = esp_avrc_ct_register_callback(bt_app_avrc_ct_cb)) != ESP_OK)
+        bt_log("avrcp: volume sync unavailable (%d)", ret);
+
+    BT_TRY(esp_a2d_source_init(), "a2dp");
+    BT_TRY(esp_a2d_register_callback(bt_app_a2d_cb), "a2dp");
+    esp_a2d_mcc_t mcc;
+    mcc.losc = A2D_SBC_INFO_LEN;
+    mcc.media_type = A2D_MEDIA_TYPE_AUDIO;
+    mcc.codec_type = ESP_A2D_MCT_SBC;
+    mcc.cie.sbc_info.samp_freq    = ESP_A2D_SBC_CIE_SF_44K | ESP_A2D_SBC_CIE_SF_48K;
+    mcc.cie.sbc_info.ch_mode      = ESP_A2D_SBC_CIE_CH_MODE_JOINT_STEREO;
+    mcc.cie.sbc_info.block_len    = ESP_A2D_SBC_CIE_BLOCK_LEN_16;
+    mcc.cie.sbc_info.num_subbands = ESP_A2D_SBC_CIE_NUM_SUBBANDS_8;
+    mcc.cie.sbc_info.alloc_mthd   = ESP_A2D_SBC_CIE_ALLOC_MTHD_LOUDNESS;
+    mcc.cie.sbc_info.min_bitpool  = 3;
+    mcc.cie.sbc_info.max_bitpool  = 53;
+    BT_TRY(esp_a2d_source_register_stream_endpoint(0, &mcc), "a2dp endpoint");
+    if ((ret = esp_hf_ag_register_callback(bt_app_hf_cb)) != ESP_OK
+        || (ret = esp_hf_ag_init()) != ESP_OK)
+        bt_log("hfp: headphone battery unavailable (%d)", ret);
+    BT_TRY(esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE), "scan mode");
+
+    esp_bd_addr_t bonded_addrs[BT_MAX_ENTRIES];
+    int num_bonded_addrs = BT_MAX_ENTRIES;
+    esp_bt_gap_get_bond_device_list(&num_bonded_addrs, bonded_addrs);
+    for (int i = 0; i < num_bonded_addrs; i++) {
+        memcpy(bt_entries[i].addr, (bonded_addrs + i), ESP_BD_ADDR_LEN);
+        if (!bt_lookup_name(bt_entries[i].addr, bt_entries[i].name, BT_MAX_NAME_LEN))
+            strlcpy(bt_entries[i].name, "Unknown Paired Device", BT_MAX_NAME_LEN);
+        bt_entries[i].rssi = -128;
+        bt_entries[i].valid = true;
+    }
+    bt_entries[num_bonded_addrs].valid = false;
     mutex_unlock(&bt_power_mutex);
+    return true;
+
+fail:
+#undef BT_TRY
+    bt_log("bluetooth failed to start: %s (%d)", what, ret);
+    /* each of these is a no-op if that part never came up */
+    esp_hf_ag_deinit();
+    esp_a2d_source_deinit();
+    esp_avrc_ct_deinit();
+    esp_avrc_tg_deinit();
+    esp_bluedroid_disable();
+    esp_bluedroid_deinit();
+    bt_hci_disable();
+    mutex_unlock(&bt_power_mutex);
+    if (!quiet)
+        splashf(HZ * 3, "Bluetooth failed to start (%s %d)", what, ret);
+    return false;
 }
 
 void bt_disable(void)
@@ -388,6 +397,7 @@ void bt_disable(void)
         esp_bt_gap_cancel_discovery();
         esp_a2d_source_deinit();
         esp_avrc_tg_deinit();
+        esp_avrc_ct_deinit();
         esp_hf_ag_deinit();
         esp_bluedroid_disable();
         esp_bluedroid_deinit();
@@ -404,6 +414,8 @@ void bt_disable(void)
     }
     bt_connected = false;
     bt_batt_pct = -1;
+    bt_abs_vol = false;
+    bt_abs_vol_sent = -1;
     bt_avrc_play_status_registered = false;
     strlcpy(bt_status, BT_TITLE_HINT, sizeof(bt_status));
     mutex_unlock(&bt_power_mutex);
@@ -414,40 +426,50 @@ int bt_toggle(void)
 {
     if (bt_is_enabled()) {
         bt_disable();
-    } else {
-        bt_enable(false);
+    } else if (bt_enable(false)) {
         bt_connect_last();
     }
     return 0;
 }
 
-static void bluetooth_enable_discover(void)
+static bool bluetooth_enable_discover(void)
 {
     esp_err_t ret;
-    bt_enable(false);
+    if (!bt_enable(false))
+        return false;
     if ((ret = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 5, 0)) != ESP_OK) {
         bt_set_status(true, "Scan failed (%d)", ret);
     }
+    return true;
 }
 
-/* "Enable on Startup": firmware upload takes a few seconds, keep it off
- * the boot path */
-static uint32_t bt_start_stack[(16 * 1024) / sizeof(uint32_t)];
+/* Background manager: "Enable on Startup" (firmware upload takes a moment,
+ * keep it off the boot path) and "Auto Off When Idle". */
+static uint32_t bt_mgr_stack[(16 * 1024) / sizeof(uint32_t)];
 
-static void bt_start_task(void)
+static void bt_mgr_task(void)
 {
-    bt_enable(true);
-    bt_connect_last();
-    thread_exit();
+    if (global_settings.bt_on_startup && bt_enable(true))
+        bt_connect_last();
+    while (true) {
+        sleep(HZ * 5);
+        if (!bt_is_enabled() || bt_connected || global_settings.bt_auto_off == 0) {
+            bt_idle_since = current_tick;
+            continue;
+        }
+        if (TIME_AFTER(current_tick, bt_idle_since + global_settings.bt_auto_off * 60 * HZ)) {
+            bt_log("auto off: no connection for %d min", global_settings.bt_auto_off);
+            bt_disable();
+        }
+    }
 }
 
 void bt_init(void)
 {
     mutex_init(&bt_log_mutex);
     mutex_init(&bt_power_mutex);
-    if (global_settings.bt_on_startup)
-        create_thread(bt_start_task, bt_start_stack, sizeof(bt_start_stack), 0,
-                      "bt_start" IF_PRIO(, PRIORITY_BACKGROUND));
+    create_thread(bt_mgr_task, bt_mgr_stack, sizeof(bt_mgr_stack), 0,
+                  "bt_mgr" IF_PRIO(, PRIORITY_BACKGROUND));
 }
 
 int bt_action_callback(int action, struct gui_synclist *lists)
@@ -532,7 +554,9 @@ bool bt_scan(void)
     struct simplelist_info info;
 
 
-    bluetooth_enable_discover();
+    if (!bluetooth_enable_discover())
+        return false;
+    bt_idle_since = current_tick; /* don't auto-off while picking a device */
     int size = 0;
     while (bt_entries[size].valid && size < BT_MAX_ENTRIES) {
         size++;
@@ -697,7 +721,8 @@ static const char *bt_forget_getname(int item, void *data, char *buf, size_t len
 int bt_forget_devices(void)
 {
     struct simplelist_info info;
-    bt_enable(false); /* paired list lives in the stack's config */
+    if (!bt_enable(false)) /* paired list lives in the stack's config */
+        return 0;
     esp_bt_gap_cancel_discovery();
     /* rebuild bt_entries from the bonded list only */
     esp_bd_addr_t bonded[BT_MAX_ENTRIES];
@@ -897,8 +922,10 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                 if (bt_connected)
                     bt_set_status(true, param->conn_stat.disc_rsn == ESP_A2D_DISC_RSN_NORMAL ? "Disconnected" : "Connection lost");
                 else
-                    bt_set_status(true, "Could not connect (see bt_log.txt)");
+                    bt_set_status(true, global_settings.bt_debug_log ?
+                                  "Could not connect (see bt_log.txt)" : "Could not connect");
                 bt_connected = false;
+                bt_idle_since = current_tick;
                 bt_avrc_play_status_registered = false;
             }
             if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED || param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTING) {
@@ -959,8 +986,19 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
         case ESP_A2D_REPORT_SNK_ALL_CODEC_CAPS_EVT: {
             logf("a2d %d %d", event, param->a2d_report_snk_all_codec_caps_stat.sep_num);
             bool done = false;
-            for (int codec_idx = 0; codec_idx < NUM_CODECS; codec_idx++) {
-                current_codec = codec_list[codec_idx];
+            /* Settings > Preferred Codec first, then best to worst */
+            static struct a2dp_codec *const pref_codecs[] = {
+                NULL, &a2dp_codec_ldac, &a2dp_codec_aptx_hd, &a2dp_codec_aptx, &a2dp_codec_sbc,
+            };
+            struct a2dp_codec *order[NUM_CODECS + 1];
+            int n = 0;
+            if (global_settings.bt_codec > 0 && global_settings.bt_codec < 5)
+                order[n++] = pref_codecs[global_settings.bt_codec];
+            for (int i = 0; i < NUM_CODECS; i++)
+                if (n == 0 || codec_list[i] != order[0])
+                    order[n++] = codec_list[i];
+            for (int codec_idx = 0; codec_idx < n; codec_idx++) {
+                current_codec = order[codec_idx];
                 for (uint32_t i = 0; i < param->a2d_report_snk_all_codec_caps_stat.sep_num; i++) {
                     esp_a2d_mcc_t *sink_mcc = &param->a2d_report_snk_all_codec_caps_stat.sep_mcc[i].mcc;
                     if (current_codec->is_acceptable(sink_mcc)) {
@@ -1020,6 +1058,131 @@ static void bt_notify_play_status(esp_avrc_playback_stat_t st)
     esp_avrc_rn_param_t rn = { .playback = st };
     logf("avrc-tg notify play status %d", st);
     esp_avrc_tg_send_rn_rsp(ESP_AVRC_RN_PLAY_STATUS_CHANGE, ESP_AVRC_RN_RSP_CHANGED, &rn);
+}
+
+/* AVRCP absolute volume: when the headphones confirm they handle volume,
+ * the volume keys drive their amplifier and we send full-scale audio (better
+ * quality, and the headphones' own buttons move our volume). Until they
+ * confirm a SetAbsoluteVolume, software volume stays in charge. */
+static uint8_t bt_avrc_tl;
+
+static uint8_t bt_next_tl(void)
+{
+    bt_avrc_tl = (bt_avrc_tl + 1) & 0x0F;
+    return bt_avrc_tl;
+}
+
+/* volume setting value -> centibels */
+static int bt_vol_to_cb(int v)
+{
+    int cb = v * 10;
+    for (int d = sound_numdecimals(SOUND_VOLUME); d > 0; d--)
+        cb /= 10;
+    return cb;
+}
+
+/* centibels -> AVRCP 0..127, linear in dB over our volume range */
+static int bt_cb_to_avrc(int cb)
+{
+    int lo = bt_vol_to_cb(sound_min(SOUND_VOLUME));
+    int hi = bt_vol_to_cb(sound_max(SOUND_VOLUME));
+    if (cb == PCM_MUTE_LEVEL || cb <= lo)
+        return 0;
+    if (cb >= hi)
+        return 127;
+    return ((cb - lo) * 127 + (hi - lo) / 2) / (hi - lo);
+}
+
+/* AVRCP 0..127 -> volume setting value, snapped to a volume step */
+static int bt_avrc_to_vol(int a)
+{
+    int lo = sound_min(SOUND_VOLUME), hi = sound_max(SOUND_VOLUME);
+    int step = sound_steps(SOUND_VOLUME);
+    int v = lo + ((hi - lo) * a + 63) / 127;
+    v = lo + ((v - lo + step / 2) / step) * step;
+    return MIN(v, hi);
+}
+
+/* pcm_sink set_volume op, called from audiohw_set_volume */
+static void bt_sink_set_volume(int l, int r)
+{
+    if (!bt_abs_vol) {
+        pcm_set_master_volume(l, r);
+        return;
+    }
+    int vol = MAX(l, r);
+    if (vol == PCM_MUTE_LEVEL) {
+        pcm_set_master_volume(PCM_MUTE_LEVEL, PCM_MUTE_LEVEL);
+    } else {
+        /* full scale; keep only the balance in software */
+        pcm_set_master_volume(l == PCM_MUTE_LEVEL ? l : l - vol,
+                              r == PCM_MUTE_LEVEL ? r : r - vol);
+    }
+    int a = bt_cb_to_avrc(vol);
+    if (a != bt_abs_vol_sent) {
+        bt_abs_vol_sent = a;
+        esp_avrc_ct_send_set_absolute_volume_cmd(bt_next_tl(), a);
+    }
+}
+
+/* the headphones changed volume (their buttons): follow it */
+static void bt_follow_remote_volume(int a)
+{
+    if (a == bt_abs_vol_sent)
+        return;
+    int v = bt_avrc_to_vol(a);
+    /* what bt_sink_set_volume will compute, so it doesn't echo back */
+    bt_abs_vol_sent = bt_cb_to_avrc(bt_vol_to_cb(v));
+    logf("avrc-ct remote volume %d -> %d", a, v);
+    sound_set_volume(v);
+}
+
+static void bt_app_avrc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *param)
+{
+    switch (event) {
+        case ESP_AVRC_CT_CONNECTION_STATE_EVT:
+            logf("avrc-ct conn %d", param->conn_stat.connected);
+            if (!param->conn_stat.connected && bt_abs_vol) {
+                bt_abs_vol = false;
+                bt_abs_vol_sent = -1;
+                setvol(); /* back to software volume */
+            }
+            break;
+        case ESP_AVRC_CT_REMOTE_FEATURES_EVT:
+            logf("avrc-ct feat 0x%lx tg 0x%x", (unsigned long)param->rmt_feats.feat_mask,
+                 param->rmt_feats.tg_feat_flag);
+            /* AVRCP 1.4 advanced control + category 2 (amplifier) */
+            if ((param->rmt_feats.feat_mask & ESP_AVRC_FEAT_ADV_CTRL) &&
+                (param->rmt_feats.tg_feat_flag & ESP_AVRC_FEAT_FLAG_CAT2)) {
+                esp_avrc_ct_send_register_notification_cmd(bt_next_tl(),
+                                                            ESP_AVRC_RN_VOLUME_CHANGE, 0);
+                /* offer our current volume; we switch over once they ack */
+                bt_abs_vol_sent = bt_cb_to_avrc(bt_vol_to_cb(global_status.volume));
+                esp_avrc_ct_send_set_absolute_volume_cmd(bt_next_tl(), bt_abs_vol_sent);
+            }
+            break;
+        case ESP_AVRC_CT_SET_ABSOLUTE_VOLUME_RSP_EVT:
+            logf("avrc-ct abs vol ack %d", param->set_volume_rsp.volume);
+            if (!bt_abs_vol) {
+                bt_abs_vol = true;
+                bt_log("volume sync on");
+                setvol(); /* digital volume to full scale */
+            }
+            bt_follow_remote_volume(param->set_volume_rsp.volume);
+            break;
+        case ESP_AVRC_CT_CHANGE_NOTIFY_EVT:
+            if (param->change_ntf.event_id == ESP_AVRC_RN_VOLUME_CHANGE) {
+                /* each notification needs a new registration */
+                esp_avrc_ct_send_register_notification_cmd(bt_next_tl(),
+                                                            ESP_AVRC_RN_VOLUME_CHANGE, 0);
+                if (bt_abs_vol)
+                    bt_follow_remote_volume(param->change_ntf.event_parameter.volume);
+            }
+            break;
+        default:
+            logf("avrc-ct %d", event);
+            break;
+    }
 }
 
 static void bt_app_avrc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t *param) {
@@ -1171,5 +1334,6 @@ struct pcm_sink bt_pcm_sink = {
         .unlock   = bt_sink_unlock,
         .play     = bt_sink_play,
         .stop     = bt_sink_stop,
+        .set_volume = bt_sink_set_volume,
     },
 };

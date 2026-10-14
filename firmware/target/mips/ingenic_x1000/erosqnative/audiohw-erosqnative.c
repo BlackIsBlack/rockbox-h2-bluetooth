@@ -180,12 +180,16 @@ void audiohw_set_volume(int vol_l, int vol_r)
     r = vol_r;
 
 #ifdef HAVE_BLUETOOTH
-    /* Bluetooth sink: software volume, no line-out clamp */
-    if (pcm_get_current_sink() != &builtin_pcm_sink)
+    /* Bluetooth sink: its own volume, or software volume; no line-out clamp */
+    struct pcm_sink *sink = pcm_get_current_sink();
+    if (sink != &builtin_pcm_sink)
     {
         l = l <= PCM5102A_VOLUME_MIN ? PCM_MUTE_LEVEL : l;
         r = r <= PCM5102A_VOLUME_MIN ? PCM_MUTE_LEVEL : r;
-        pcm_set_master_volume(l, r);
+        if (sink->ops.set_volume)
+            sink->ops.set_volume(l, r);
+        else
+            pcm_set_master_volume(l, r);
         return;
     }
 #endif

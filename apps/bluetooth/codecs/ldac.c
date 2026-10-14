@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+#include "settings.h"
 #include "common/bt_defs.h"
 #include "esp_a2dp_api.h"
 #include "tick.h"
@@ -218,7 +219,12 @@ static void a2dp_vendor_ldac_encoder_update(uint32_t freq, esp_a2d_mcc_t *pref_m
 
   // Set the quality mode index
   int old_quality_mode_index = p_encoder_params->quality_mode_index;
-  p_encoder_params->quality_mode_index = A2DP_LDAC_QUALITY_ABR;
+  static const int quality_modes[] = {  /* Settings > LDAC Quality */
+    A2DP_LDAC_QUALITY_ABR, A2DP_LDAC_QUALITY_HIGH,
+    A2DP_LDAC_QUALITY_MID, A2DP_LDAC_QUALITY_LOW,
+  };
+  p_encoder_params->quality_mode_index =
+      quality_modes[global_settings.bt_ldac_quality & 3];
 
   int ldac_eqmid = LDAC_ABR_MODE_EQMID;
   if (p_encoder_params->quality_mode_index == A2DP_LDAC_QUALITY_ABR) {

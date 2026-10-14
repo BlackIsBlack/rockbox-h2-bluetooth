@@ -452,11 +452,16 @@ MENUITEM_SETTING(bt_on_startup_item, &global_settings.bt_on_startup, NULL);
 MENUITEM_SETTING(bt_show_icon_item, &global_settings.bt_show_icon, NULL);
 MENUITEM_FUNCTION(bt_forget_item, 0, ID2P(LANG_BLUETOOTH_FORGET),
                   bt_forget_devices, NULL, Icon_NOICON);
+MENUITEM_SETTING(bt_auto_off_item, &global_settings.bt_auto_off, NULL);
+MENUITEM_SETTING(bt_codec_item, &global_settings.bt_codec, NULL);
+MENUITEM_SETTING(bt_ldac_quality_item, &global_settings.bt_ldac_quality, NULL);
+MENUITEM_SETTING(bt_debug_log_item, &global_settings.bt_debug_log, NULL);
 
 MAKE_MENU(bluetooth_settings_menu, ID2P(LANG_BLUETOOTH_SETTINGS), 0,
           Icon_System_menu,
           &bt_power_item, &bt_devices_item, &bt_on_startup_item,
-          &bt_show_icon_item, &bt_forget_item);
+          &bt_auto_off_item, &bt_codec_item, &bt_ldac_quality_item,
+          &bt_show_icon_item, &bt_forget_item, &bt_debug_log_item);
 #endif
 
 MAKE_MENU(system_menu, ID2P(LANG_SYSTEM),

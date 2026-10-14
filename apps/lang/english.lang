@@ -17367,3 +17367,88 @@
     bluetooth: "No paired devices"
   </voice>
 </phrase>
+<phrase>
+  id: LANG_BLUETOOTH_DEBUG_LOG
+  desc: Bluetooth settings: write bt_log.txt / bt_hci.pcap
+  user: core
+  <source>
+    *: none
+    bluetooth: "Debug Logging"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "Debug Logging"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "Debug Logging"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BLUETOOTH_AUTO_OFF
+  desc: Bluetooth settings: turn off after N minutes with no connection
+  user: core
+  <source>
+    *: none
+    bluetooth: "Auto Off When Idle"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "Auto Off When Idle"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "Auto Off When Idle"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BLUETOOTH_CODEC
+  desc: Bluetooth settings: preferred audio codec
+  user: core
+  <source>
+    *: none
+    bluetooth: "Preferred Codec"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "Preferred Codec"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "Preferred Codec"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BLUETOOTH_LDAC_QUALITY
+  desc: Bluetooth settings: LDAC bitrate
+  user: core
+  <source>
+    *: none
+    bluetooth: "LDAC Quality"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "LDAC Quality"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "LDAC Quality"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BLUETOOTH_ADAPTIVE
+  desc: Bluetooth settings: LDAC adaptive bitrate
+  user: core
+  <source>
+    *: none
+    bluetooth: "Adaptive"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "Adaptive"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "Adaptive"
+  </voice>
+</phrase>
