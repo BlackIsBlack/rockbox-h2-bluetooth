@@ -11,6 +11,9 @@
 #include "esp_bt_device.h"
 #include "esp_bt_main.h"
 #include "esp_gap_bt_api.h"
+#include "esp_hf_ag_api.h"
+#include "bluetooth/hfp_at.h"
+#include "powermgmt.h"
 #include "list.h"
 #include "logf.h"
 #include "panic.h"
@@ -125,6 +128,7 @@ static esp_a2d_audio_state_t bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
 static esp_bd_addr_t bt_target_addr;   /* device we last tried to connect */
 static char bt_target_name[BT_MAX_NAME_LEN];
 static bool bt_connected;
+static int bt_batt_pct = -1; /* connected headphones' battery, -1 = unknown */
 
 static const char *bt_codec_name(void)
 {
@@ -202,6 +206,59 @@ static void bt_connect_last(void)
     bt_log("reconnect " ESP_BD_ADDR_STR " '%s'", ESP_BD_ADDR_HEX(addr), bt_target_name);
     if (esp_a2d_source_connect(addr) == ESP_OK)
         bt_set_status(false, "Connecting to %s...", bt_target_name);
+}
+
+/* HFP AG: we only want the headphones' battery (see hfp_at.c). Answer
+ * what an AG must answer and report "no calls", nothing more. */
+static void bt_app_hf_cb(esp_hf_cb_event_t event, esp_hf_cb_param_t *param)
+{
+    switch (event) {
+        case ESP_HF_CONNECTION_STATE_EVT:
+            logf("hf conn state %d", param->conn_stat.state);
+            if (param->conn_stat.state == ESP_HF_CONNECTION_STATE_DISCONNECTED)
+                bt_batt_pct = -1;
+            break;
+        case ESP_HF_CIND_RESPONSE_EVT: {
+            int lvl = battery_level(); /* our own battery, 0-5 for +CIND */
+            esp_hf_ag_cind_response(param->cind_rep.remote_addr,
+                                    ESP_HF_CALL_STATUS_NO_CALLS,
+                                    ESP_HF_CALL_SETUP_STATUS_IDLE,
+                                    ESP_HF_NETWORK_STATE_NOT_AVAILABLE, 0,
+                                    ESP_HF_ROAMING_STATUS_INACTIVE,
+                                    lvl < 0 ? 5 : lvl / 20,
+                                    ESP_HF_CALL_HELD_STATUS_NONE);
+            break;
+        }
+        case ESP_HF_COPS_RESPONSE_EVT:
+            esp_hf_ag_cops_response(param->cops_rep.remote_addr, "Rockbox");
+            break;
+        case ESP_HF_DIAL_EVT: /* no phone here */
+            esp_hf_ag_cmee_send(param->out_call.remote_addr, ESP_HF_AT_RESPONSE_CODE_ERR,
+                                ESP_HF_CME_OPERATION_NOT_SUPPORTED);
+            break;
+        case ESP_HF_UNAT_RESPONSE_EVT: {
+            const char *reply;
+            bool ok;
+            int pct = hfp_at_handle(param->unat_rep.unat, &reply, &ok);
+            logf("hf AT%s -> %s%s", param->unat_rep.unat, reply ? reply : "", ok ? " OK" : "ERROR");
+            if (pct >= 0 && pct != bt_batt_pct) {
+                bt_batt_pct = pct;
+                button_queue_post(BUTTON_REDRAW, 0); /* refresh Devices list */
+            }
+            if (!ok) {
+                esp_hf_ag_unknown_at_send(param->unat_rep.remote_addr, NULL); /* ERROR */
+                break;
+            }
+            if (reply)
+                esp_hf_ag_unknown_at_send(param->unat_rep.remote_addr, (char *)reply);
+            esp_hf_ag_cmee_send(param->unat_rep.remote_addr, ESP_HF_AT_RESPONSE_CODE_OK,
+                                ESP_HF_CME_AG_FAILURE);
+            break;
+        }
+        default:
+            logf("hf %d", event);
+            break;
+    }
 }
 
 static void bt_enable(bool quiet)
@@ -292,6 +349,9 @@ static void bt_enable(bool quiet)
         if ((ret = esp_a2d_source_register_stream_endpoint(0, &mcc)) != ESP_OK) {
             panicf("%s a2dp register stream endpoint failed: %d", __func__, ret);
         }
+        if ((ret = esp_hf_ag_register_callback(bt_app_hf_cb)) != ESP_OK
+            || (ret = esp_hf_ag_init()) != ESP_OK)
+            bt_log("hfp: headphone battery unavailable (%d)", ret);
         if ((ret = esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE)) != ESP_OK) {
             panicf("%s set scan mode failed: %d", __func__, ret);
         }
@@ -328,6 +388,7 @@ void bt_disable(void)
         esp_bt_gap_cancel_discovery();
         esp_a2d_source_deinit();
         esp_avrc_tg_deinit();
+        esp_hf_ag_deinit();
         esp_bluedroid_disable();
         esp_bluedroid_deinit();
         bt_hci_disable();
@@ -342,6 +403,7 @@ void bt_disable(void)
         bt_log("--- bluetooth off ---");
     }
     bt_connected = false;
+    bt_batt_pct = -1;
     bt_avrc_play_status_registered = false;
     strlcpy(bt_status, BT_TITLE_HINT, sizeof(bt_status));
     mutex_unlock(&bt_power_mutex);
@@ -452,7 +514,10 @@ const char * bt_getname(int selected_item, void * data, char * buffer, size_t bu
         return entry->name;
     } else {
         if (bt_connected && memcmp(entry->addr, bt_target_addr, ESP_BD_ADDR_LEN) == 0) {
-            snprintf(buffer, buffer_len, "Connected (%s)", bt_codec_name());
+            if (bt_batt_pct >= 0)
+                snprintf(buffer, buffer_len, "Connected (%s)  Battery %d%%", bt_codec_name(), bt_batt_pct);
+            else
+                snprintf(buffer, buffer_len, "Connected (%s)", bt_codec_name());
         } else if (entry->rssi == -128) {
             snprintf(buffer, buffer_len, ESP_BD_ADDR_STR " (Saved)", ESP_BD_ADDR_HEX(entry->addr));
         } else {
@@ -819,6 +884,8 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                 memcpy(bt_target_addr, param->conn_stat.remote_bda, ESP_BD_ADDR_LEN);
                 bt_save_last(bt_target_addr);
                 bt_connected = true;
+                bt_batt_pct = -1;
+                esp_hf_ag_slc_connect(param->conn_stat.remote_bda); /* battery */
                 bt_set_status(true, "Connected: %s", bt_target_name[0] ? bt_target_name : "headphones");
                 semaphore_init(&sink_control_sem, 1, 0);
                 queue_init(&sink_control_queue, false);

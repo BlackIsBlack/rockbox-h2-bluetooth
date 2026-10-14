@@ -17,6 +17,7 @@
 #define __BTC_HF_AG_H__
 
 #include "common/bt_target.h"
+#include "rb_time.h"
 #include "btc/btc_task.h"
 #include "btc/btc_common.h"
 #include "bta/bta_ag_api.h"

@@ -71,6 +71,14 @@ static hf_local_param_t hf_local_param;
 hf_local_param_t *hf_local_param_ptr = NULL;
 #endif
 
+/* Rockbox: we're a music player, not a phone. The AG is only there to read
+ * the headphones' battery, so pass unknown AT commands (+XAPL/+IPHONEACCEV,
+ * +BIND/+BIEV) to the app, advertise HF indicators, and nothing call
+ * related (no voice recognition, in-band ring, echo cancelling...). */
+#define BTC_HF_FEATURES    ( BTA_AG_FEAT_UNAT    | \
+                             BTA_AG_FEAT_HF_IND  | \
+                             BTA_AG_FEAT_EXTERR )
+
 #if (BTM_WBS_INCLUDED == TRUE)
 #ifndef BTC_HF_FEATURES
 #define BTC_HF_FEATURES    ( BTA_AG_FEAT_ECNR    | \

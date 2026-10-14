@@ -188,6 +188,7 @@ keymaps/keymap-touchscreen.c
 #endif
 #ifdef HAVE_BLUETOOTH
 bluetooth/bt.c
+bluetooth/hfp_at.c
 bluetooth/codecs/sbc.c
 bluetooth/codecs/ldac.c
 bluetooth/codecs/aptx.c

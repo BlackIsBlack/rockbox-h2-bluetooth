@@ -4,6 +4,8 @@
 #define CONFIG_BT_ENC_KEY_SIZE_CTRL_STD TRUE
 #define CONFIG_BT_A2DP_ENABLE TRUE
 #define CONFIG_BT_AVRCP_ENABLED TRUE
+/* HFP AG: only used to read the headphones' battery (apps/bluetooth/hfp_at.c) */
+#define CONFIG_BT_HFP_AG_ENABLE TRUE
 #define CONFIG_BT_AVRCP_CT_COVER_ART_ENABLED TRUE
 #define CONFIG_BT_SDP_PAD_LEN 300
 #define CONFIG_BT_SDP_ATTR_LEN 300
