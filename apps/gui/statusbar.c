@@ -43,6 +43,9 @@
 #endif
 #include "appevents.h"
 #include "timefuncs.h"
+#ifdef HAVE_BLUETOOTH
+#include "bluetooth/bt.h"
+#endif
 
 /* FIXME: should be removed from icon.h to avoid redefinition,
    but still needed for compatibility with old system */
@@ -119,6 +122,10 @@
                                                 STATUSBAR_LOCKM_WIDTH + \
                                                 7*ICONS_SPACING
 #define STATUSBAR_LOCKR_WIDTH                   5
+#define STATUSBAR_BT_X_POS                      STATUSBAR_LOCKR_X_POS + \
+                                                STATUSBAR_LOCKR_WIDTH + \
+                                                ICONS_SPACING
+#define STATUSBAR_BT_WIDTH                      7
 
 #if (CONFIG_LED == LED_VIRTUAL) || defined(HAVE_REMOTE_LCD)
 #define STATUSBAR_DISK_WIDTH                    12
@@ -240,6 +247,9 @@ static struct screen * sb_fill_bar_info(struct gui_statusbar * bar)
 #endif
     bar->info.repeat = global_settings.repeat_mode;
     bar->info.playmode = current_playmode();
+#ifdef HAVE_BLUETOOTH
+    bar->info.bluetooth = bt_get_status_level() > 0;
+#endif
 #if CONFIG_RTC
     bar->time = get_time();
 #endif /* CONFIG_RTC */
@@ -318,6 +328,12 @@ void gui_statusbar_draw(struct gui_statusbar * bar, bool force_redraw, struct vi
 #ifdef HAS_REMOTE_BUTTON_HOLD
         if (bar->info.keylockremote)
             gui_statusbar_icon_lock_remote(display);
+#endif
+#ifdef HAVE_BLUETOOTH
+        if (bar->info.bluetooth)
+            display->mono_bitmap(bitmap_icons_7x8[Icon_Bluetooth],
+                                 STATUSBAR_BT_X_POS, STATUSBAR_Y_POS,
+                                 STATUSBAR_BT_WIDTH, SB_ICON_HEIGHT);
 #endif
 #if CONFIG_RTC
         gui_statusbar_time(display, bar->time);

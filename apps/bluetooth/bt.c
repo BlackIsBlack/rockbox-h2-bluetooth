@@ -571,6 +571,15 @@ static void bt_codec_task(void)
     thread_exit();
 }
 
+int bt_get_status_level(void)
+{
+    if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED)
+        return 0;
+    if (!bt_connected)
+        return 1;
+    return bt_current_state == ESP_A2D_AUDIO_STATE_STARTED ? 3 : 2;
+}
+
 static esp_a2d_conn_hdl_t conn_hdl;
 static bool sampr_switch_ongoing = false;
 static struct semaphore sink_control_sem;

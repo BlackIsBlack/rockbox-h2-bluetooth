@@ -78,6 +78,7 @@ enum icons_7x8 {
     Icon_DownArrow,
     Icon_UpArrow,
     Icon_RepeatAB,
+    Icon_Bluetooth,
     Icon7x8Last
 };
 

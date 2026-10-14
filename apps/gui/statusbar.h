@@ -48,6 +48,9 @@ struct status_info {
 #if (CONFIG_LED == LED_VIRTUAL) || defined(HAVE_REMOTE_LCD)
     bool led; /* disk LED simulation in the status bar */
 #endif
+#ifdef HAVE_BLUETOOTH
+    bool bluetooth;
+#endif
 
 };
 

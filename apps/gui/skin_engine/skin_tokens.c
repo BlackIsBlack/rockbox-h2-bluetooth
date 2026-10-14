@@ -18,6 +18,10 @@
  * KIND, either express or implied.
  *
  ****************************************************************************/
+#include "config.h"
+#ifdef HAVE_BLUETOOTH
+#include "bluetooth/bt.h"
+#endif
 #include "font.h"
 #include <stdio.h>
 #include "string-extra.h"
@@ -1509,6 +1513,19 @@ const char *get_token_value(struct gui_wps *gwps,
             if (usb_inserted())
                 return "u";
             return NULL;
+        case SKIN_TOKEN_BLUETOOTH_STATUS:
+        {
+            /* 0 off, 1 on, 2 connected, 3 streaming: %?Bt<off|on|conn|play> */
+#ifdef HAVE_BLUETOOTH
+            int bt = bt_get_status_level();
+#else
+            int bt = 0;
+#endif
+            itoa_buf(buf, buf_size, bt);
+            numeric_ret = bt + 1;
+            numeric_buf = buf;
+            goto gtv_ret_numeric_tag_info;
+        }
         case SKIN_TOKEN_BATTERY_SLEEPTIME:
         {
             if (get_sleep_timer() == 0)
