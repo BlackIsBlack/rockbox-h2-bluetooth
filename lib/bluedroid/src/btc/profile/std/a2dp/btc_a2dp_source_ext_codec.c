@@ -26,7 +26,9 @@
 
 #if (BTC_AV_SRC_INCLUDED == TRUE) && (BTC_AV_EXT_CODEC == TRUE)
 
-#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (27)
+/* Rockbox: ~1 s of audio (was 27 packets, ~0.5 s) to ride out short radio
+ * congestion instead of dropping audio */
+#define MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ     (54)
 
 enum {
     BTC_A2DP_SOURCE_STATE_OFF = 0,

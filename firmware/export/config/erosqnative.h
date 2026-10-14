@@ -45,7 +45,7 @@
 
 /* Bluetooth */
 #define HAVE_BLUETOOTH
-#define BT_HEAP_SIZE       0x40000 /* 256 KiB */
+#define BT_HEAP_SIZE       0xC0000 /* 768 KiB: ~1 s A2DP TX queue of 4 KiB buffers + HFP */
 
 /* LCD defines */
 #define CONFIG_LCD   LCD_EROSQ
