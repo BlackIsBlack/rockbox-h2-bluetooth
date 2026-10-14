@@ -434,14 +434,33 @@ MAKE_MENU(usb_menu, ID2P(LANG_USB_MENU), 0, Icon_NOICON,
 
 #ifdef HAVE_BLUETOOTH
 #include "bluetooth/bt.h"
-MENUITEM_FUNCTION(bluetooth_item, 0, "Bluetooth", bt_scan, NULL, Icon_NOICON);
+
+static char *bt_power_text(int selected_item, void *data,
+                           char *buffer, size_t buffer_len)
+{
+    (void)selected_item; (void)data;
+    snprintf(buffer, buffer_len, "%s: %s", str(LANG_BLUETOOTH),
+             str(bt_is_enabled() ? LANG_ON : LANG_OFF));
+    return buffer;
+}
+
+MENUITEM_FUNCTION_DYNTEXT(bt_power_item, 0, bt_toggle, bt_power_text,
+                          NULL, NULL, NULL, Icon_NOICON);
+MENUITEM_FUNCTION(bt_devices_item, 0, ID2P(LANG_BLUETOOTH_DEVICES),
+                  bt_scan, NULL, Icon_NOICON);
+MENUITEM_SETTING(bt_on_startup_item, &global_settings.bt_on_startup, NULL);
+MENUITEM_SETTING(bt_show_icon_item, &global_settings.bt_show_icon, NULL);
+MENUITEM_FUNCTION(bt_forget_item, 0, ID2P(LANG_BLUETOOTH_FORGET),
+                  bt_forget_devices, NULL, Icon_NOICON);
+
+MAKE_MENU(bluetooth_settings_menu, ID2P(LANG_BLUETOOTH_SETTINGS), 0,
+          Icon_System_menu,
+          &bt_power_item, &bt_devices_item, &bt_on_startup_item,
+          &bt_show_icon_item, &bt_forget_item);
 #endif
 
 MAKE_MENU(system_menu, ID2P(LANG_SYSTEM),
           0, Icon_System_menu,
-#ifdef HAVE_BLUETOOTH
-            &bluetooth_item,
-#endif
 #if (BATTERY_CAPACITY_INC > 0) || defined(HAVE_USB_CHARGING_ENABLE)
             &battery_menu,
 #endif

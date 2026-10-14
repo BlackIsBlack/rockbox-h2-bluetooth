@@ -248,7 +248,7 @@ static struct screen * sb_fill_bar_info(struct gui_statusbar * bar)
     bar->info.repeat = global_settings.repeat_mode;
     bar->info.playmode = current_playmode();
 #ifdef HAVE_BLUETOOTH
-    bar->info.bluetooth = bt_get_status_level() > 0;
+    bar->info.bluetooth = bt_get_status_level();
 #endif
 #if CONFIG_RTC
     bar->time = get_time();
@@ -331,7 +331,8 @@ void gui_statusbar_draw(struct gui_statusbar * bar, bool force_redraw, struct vi
 #endif
 #ifdef HAVE_BLUETOOTH
         if (bar->info.bluetooth)
-            display->mono_bitmap(bitmap_icons_7x8[Icon_Bluetooth],
+            display->mono_bitmap(bitmap_icons_7x8[bar->info.bluetooth >= 2 ?
+                                    Icon_Bluetooth : Icon_BluetoothIdle],
                                  STATUSBAR_BT_X_POS, STATUSBAR_Y_POS,
                                  STATUSBAR_BT_WIDTH, SB_ICON_HEIGHT);
 #endif

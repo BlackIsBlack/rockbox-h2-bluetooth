@@ -478,6 +478,9 @@ static void init(void)
 #include "buflib.h"
 #include "errno.h"
 #include "tlsf.h"
+#ifdef HAVE_BLUETOOTH
+#include "bluetooth/bt.h"
+#endif
 
 extern unsigned char btbuf[];
 
@@ -814,6 +817,9 @@ static void init(void)
     CHART("<settings_apply_skins");
     settings_apply_skins();
     CHART(">settings_apply_skins");
+#ifdef HAVE_BLUETOOTH
+    bt_init(); /* "Enable on Startup" runs in its own thread */
+#endif
 }
 
 #ifdef CPU_PP

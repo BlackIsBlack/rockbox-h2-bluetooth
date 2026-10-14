@@ -894,6 +894,10 @@ struct user_settings
 #ifdef HAVE_HARDWARE_CLICK
     bool keyclick_hardware; /* hardware piezo keyclick */
 #endif
+#ifdef HAVE_BLUETOOTH
+    bool bt_on_startup;     /* enable Bluetooth at boot */
+    bool bt_show_icon;      /* Bluetooth icon in status bar / %Bt */
+#endif
 
     char start_directory[MAX_PATHNAME+1];
     /* Has the root been customized from the .cfg file? false = no, true = loaded from cfg */

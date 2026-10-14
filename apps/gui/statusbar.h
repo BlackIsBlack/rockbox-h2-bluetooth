@@ -49,7 +49,7 @@ struct status_info {
     bool led; /* disk LED simulation in the status bar */
 #endif
 #ifdef HAVE_BLUETOOTH
-    bool bluetooth;
+    int bluetooth; /* bt_get_status_level() */
 #endif
 
 };

@@ -17231,3 +17231,139 @@
     touchscreen: "Touchscreen Flick Shortcuts"
   </voice>
 </phrase>
+<phrase>
+  id: LANG_BLUETOOTH_SETTINGS
+  desc: in settings menu
+  user: core
+  <source>
+    *: none
+    bluetooth: "Bluetooth Settings"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "Bluetooth Settings"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "Bluetooth Settings"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BLUETOOTH
+  desc: Bluetooth on/off item in Bluetooth settings
+  user: core
+  <source>
+    *: none
+    bluetooth: "Bluetooth"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "Bluetooth"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "Bluetooth"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BLUETOOTH_DEVICES
+  desc: Scan/connect device list in Bluetooth settings
+  user: core
+  <source>
+    *: none
+    bluetooth: "Devices"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "Devices"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "Devices"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BLUETOOTH_ON_STARTUP
+  desc: Bluetooth settings: enable Bluetooth at boot
+  user: core
+  <source>
+    *: none
+    bluetooth: "Enable on Startup"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "Enable on Startup"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "Enable on Startup"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BLUETOOTH_SHOW_ICON
+  desc: Bluetooth settings: status bar / theme icon
+  user: core
+  <source>
+    *: none
+    bluetooth: "Show Bluetooth Icon"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "Show Bluetooth Icon"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "Show Bluetooth Icon"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BLUETOOTH_FORGET
+  desc: Bluetooth settings: remove paired devices
+  user: core
+  <source>
+    *: none
+    bluetooth: "Forget Devices"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "Forget Devices"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "Forget Devices"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BLUETOOTH_FORGET_CONFIRM
+  desc: Bluetooth settings: confirm removing a paired device
+  user: core
+  <source>
+    *: none
+    bluetooth: "Forget this device?"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "Forget this device?"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "Forget this device?"
+  </voice>
+</phrase>
+<phrase>
+  id: LANG_BLUETOOTH_NO_DEVICES
+  desc: Bluetooth settings: no paired devices
+  user: core
+  <source>
+    *: none
+    bluetooth: "No paired devices"
+  </source>
+  <dest>
+    *: none
+    bluetooth: "No paired devices"
+  </dest>
+  <voice>
+    *: none
+    bluetooth: "No paired devices"
+  </voice>
+</phrase>

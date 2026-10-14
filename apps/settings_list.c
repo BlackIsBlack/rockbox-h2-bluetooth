@@ -1639,6 +1639,12 @@ const struct settings_list settings[] = {
     INT_SETTING(F_TIME_SETTING, disk_spindown, LANG_SPINDOWN, 5, "disk spindown",
                     UNIT_SEC, 3, 254, 1, NULL, NULL, STORAGE_FUNCTION(spindown)),
 #endif /* HAVE_DISK_STORAGE */
+#ifdef HAVE_BLUETOOTH
+    OFFON_SETTING(0, bt_on_startup, LANG_BLUETOOTH_ON_STARTUP, false,
+                  "bluetooth on startup", NULL),
+    OFFON_SETTING(0, bt_show_icon, LANG_BLUETOOTH_SHOW_ICON, true,
+                  "bluetooth show icon", NULL),
+#endif
     /* browser */
     TEXT_SETTING(0, start_directory, "start directory", "/", NULL, NULL),
     SYSTEM_STATUS_TEXT_SETTING(0, browse_last_folder, "last folder", "/", NULL, NULL),
