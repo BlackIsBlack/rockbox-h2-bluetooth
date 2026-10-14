@@ -269,9 +269,8 @@ static void bt_enable(bool quiet)
         esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set,
                                             ESP_AVRC_RN_PLAY_STATUS_CHANGE);
         ret = esp_avrc_tg_set_rn_evt_cap(&evt_set);
-        if (ret != ESP_OK) {
-            panicf("%s avrcp tg init failed: %d", __func__, ret);
-        }
+        if (ret != ESP_OK) /* nice to have, never fatal */
+            bt_log("avrcp: play status notifications unavailable (%d)", ret);
 
         if ((ret = esp_a2d_source_init()) != ESP_OK) {
             panicf("%s a2dp source init failed: %d", __func__, ret);
@@ -943,8 +942,11 @@ static esp_avrc_playback_stat_t bt_play_status(void)
 }
 
 /* tell the headphones we started/stopped (they re-register after each) */
+void btc_avrc_tg_cache_play_status(uint8_t play_status); /* btc_avrc.c */
+
 static void bt_notify_play_status(esp_avrc_playback_stat_t st)
 {
+    btc_avrc_tg_cache_play_status(st); /* for GetPlayStatus */
     if (!bt_avrc_play_status_registered)
         return;
     bt_avrc_play_status_registered = false;
@@ -994,6 +996,7 @@ static void bt_app_avrc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param
             logf("avrc-tg %d %d", event, param->reg_ntf.event_id);
             if (param->reg_ntf.event_id == ESP_AVRC_RN_PLAY_STATUS_CHANGE) {
                 esp_avrc_rn_param_t rn = { .playback = bt_play_status() };
+                btc_avrc_tg_cache_play_status(rn.playback);
                 bt_avrc_play_status_registered = true;
                 esp_avrc_tg_send_rn_rsp(ESP_AVRC_RN_PLAY_STATUS_CHANGE, ESP_AVRC_RN_RSP_INTERIM, &rn);
             }

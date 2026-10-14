@@ -76,14 +76,24 @@ const static uint16_t cs_psth_allowed_cmd[8] = {
 const static uint16_t cs_psth_dft_supported_cmd[8] = {0};
 static uint16_t s_psth_supported_cmd[8];
 
+/* Rockbox: also allow play_status (bit 1) so headphones can track
+ * playback, which in-ear detection needs */
 const static uint16_t cs_rn_allowed_evt = \
-        0x2000; /* bit mask: 0=rsvd, 1=play_status, 2=track_chg, 3=reached_end,
+        0x2002; /* bit mask: 0=rsvd, 1=play_status, 2=track_chg, 3=reached_end,
                              4=reached_start, 5=pos_chg, 6=batt_status, 7=sys_status_chg,
                              8=player_app_setting, 9=now_playing_content, 10=avail_players, 11=addressed_player,
                              12=UID, 13=volume_chg */
 
 const static uint16_t cs_rn_dft_supported_evt = 0;
 static uint16_t s_rn_supported_evt;
+
+/* Rockbox: last play status from the app, for GetPlayStatus */
+static UINT8 s_tg_play_status = AVRC_PLAYSTATE_STOPPED;
+
+void btc_avrc_tg_cache_play_status(UINT8 play_status)
+{
+    s_tg_play_status = play_status;
+}
 
 // event ids supported to register as CT
 const static uint16_t cs_ct_rn_supported_evt = \
@@ -883,7 +893,18 @@ static void btc_rc_upstreams_evt(UINT16 event, tAVRC_COMMAND *pavrc_cmd, UINT8 c
         btc_avrc_tg_cb_to_app(ESP_AVRC_TG_SET_PLAYER_APP_VALUE_EVT, &param);
     }
     break;
-    case AVRC_PDU_GET_PLAY_STATUS:
+    case AVRC_PDU_GET_PLAY_STATUS: { /* Rockbox: answer instead of rejecting */
+        tAVRC_RESPONSE avrc_rsp;
+        memset(&avrc_rsp, 0, sizeof(avrc_rsp));
+        avrc_rsp.get_play_status.pdu = AVRC_PDU_GET_PLAY_STATUS;
+        avrc_rsp.get_play_status.opcode = opcode_from_pdu(AVRC_PDU_GET_PLAY_STATUS);
+        avrc_rsp.get_play_status.status = AVRC_STS_NO_ERROR;
+        avrc_rsp.get_play_status.song_len = 0xFFFFFFFF; /* unknown */
+        avrc_rsp.get_play_status.song_pos = 0xFFFFFFFF;
+        avrc_rsp.get_play_status.play_status = s_tg_play_status;
+        send_metamsg_rsp(btc_rc_cb.rc_handle, label, AVRC_RSP_IMPL_STBL, &avrc_rsp);
+    }
+    break;
     case AVRC_PDU_GET_ELEMENT_ATTR:
     case AVRC_PDU_INFORM_DISPLAY_CHARSET:
     //todo: check the valid response for these PDUs
@@ -1719,6 +1740,9 @@ static void btc_avrc_tg_send_rn_rsp(esp_avrc_rn_event_ids_t event_id, esp_avrc_r
     switch (event_id) {
     case ESP_AVRC_RN_VOLUME_CHANGE:
         avrc_rsp.reg_notif.param.volume = param->volume;
+        break;
+    case ESP_AVRC_RN_PLAY_STATUS_CHANGE: /* Rockbox */
+        avrc_rsp.reg_notif.param.play_status = param->playback;
         break;
     // todo: implement other event notifications
     default:

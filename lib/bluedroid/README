@@ -23,6 +23,7 @@ src/btc/profile/std/l2cap/btc_l2cap.c: moved all includes after the BTC_L2CAP_IN
 src/btc/profile/std/l2cap/btc_l2cap.c: added a common/bt_target.h include before the guard
 src/btc/profile/std/a2dp/btc_a2dp_source.c: changed time_now_us to use Rockbox tick.h, includes adjusted accordingly
 src/btc/profile/std/a2dp/bta_av_co.c: removed esp_attr.h include
+src/btc/profile/std/avrc/btc_avrc.c: TG allows/sends PLAY_STATUS_CHANGE notifications and answers GetPlayStatus (btc_avrc_tg_cache_play_status)
 src/btc/profile/std/a2dp/bta_avrc.c: fixed typo in handle_rc_disconnect
 src/btc/core/btc_task.c: wrapped blufi includes in a BLUFI_INCLUDED guard
 src/btc/core/btc_task.c: changed BTC_TASK_PRIO define to use PRIORITY_REALTIME
