@@ -33,6 +33,72 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <stdarg.h>
+#include "mutex.h"
+#include "strlcpy.h"
+
+/* Event log in /.rockbox/bt_log.txt. Bluedroid's errors/warnings land here
+ * too (esp_log.h). Capped so a warning storm can't fill the card. */
+#define BT_LOG_MAX (512 * 1024)
+static struct mutex bt_log_mutex;
+static int bt_log_fd = -2; /* -2: not opened yet, -1: failed or full */
+static long bt_log_size;
+
+void bt_log(const char *fmt, ...)
+{
+    char buf[256];
+    int n = snprintf(buf, sizeof(buf), "%ld.%02ld ",
+                     current_tick / HZ, current_tick % HZ);
+    va_list ap;
+    va_start(ap, fmt);
+    n += vsnprintf(buf + n, sizeof(buf) - n, fmt, ap);
+    va_end(ap);
+    if (n >= (int)sizeof(buf) - 1)
+        n = sizeof(buf) - 2;
+    if (n > 0 && buf[n - 1] != '\n')
+        buf[n++] = '\n';
+
+    if (bt_log_fd == -2) {
+        mutex_init(&bt_log_mutex);
+        bt_log_fd = open(ROCKBOX_DIR "/bt_log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
+        bt_log_size = bt_log_fd >= 0 ? ffilesize(bt_log_fd) : 0;
+        if (bt_log_size > BT_LOG_MAX / 2) { /* start fresh, keep it readable */
+            ftruncate(bt_log_fd, 0);
+            bt_log_size = 0;
+        }
+    }
+    if (bt_log_fd < 0)
+        return;
+    mutex_lock(&bt_log_mutex);
+    if (bt_log_size + n <= BT_LOG_MAX) {
+        write(bt_log_fd, buf, n);
+        fsync(bt_log_fd); /* survive a panic */
+        bt_log_size += n;
+    }
+    mutex_unlock(&bt_log_mutex);
+}
+
+#undef logf
+#define logf bt_log
+
+/* Shown as the device list title; set from BT threads, drawn by the UI */
+#define BT_TITLE_HINT "Play: connect  Menu: BT off"
+static char bt_status[64] = BT_TITLE_HINT;
+static volatile bool bt_status_changed;
+static volatile bool bt_status_popup;
+
+static void bt_set_status(bool popup, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(bt_status, sizeof(bt_status), fmt, ap);
+    va_end(ap);
+    bt_log("status: %s", bt_status);
+    bt_status_popup = popup;
+    bt_status_changed = true;
+    button_queue_post(BUTTON_REDRAW, 0);
+}
+
 #define BT_MAX_NAME_LEN 64
 #define BT_MAX_ENTRIES 64
 
@@ -46,6 +112,19 @@ typedef struct {
 static bt_list_entry_t bt_entries[BT_MAX_ENTRIES + 1];
 
 static struct a2dp_codec *current_codec = NULL;
+
+static esp_bd_addr_t bt_target_addr;   /* device we last tried to connect */
+static char bt_target_name[BT_MAX_NAME_LEN];
+static bool bt_connected;
+
+static const char *bt_codec_name(void)
+{
+    if (current_codec == &a2dp_codec_ldac)    return "LDAC";
+    if (current_codec == &a2dp_codec_aptx_hd) return "aptX HD";
+    if (current_codec == &a2dp_codec_aptx)    return "aptX";
+    if (current_codec == &a2dp_codec_sbc)     return "SBC";
+    return "?";
+}
 
 #define NUM_CODECS 4
 
@@ -172,6 +251,14 @@ int bt_action_callback(int action, struct gui_synclist *lists)
 {
     switch (action) {
         case ACTION_REDRAW: {
+            if (bt_status_changed) {
+                bt_status_changed = false;
+                gui_synclist_set_title(lists, bt_status, Icon_NOICON);
+                if (bt_status_popup) {
+                    bt_status_popup = false;
+                    splash(HZ * 2, bt_status);
+                }
+            }
             int size = 0;
             while (bt_entries[size].valid && size < BT_MAX_ENTRIES) {
                 size++;
@@ -181,18 +268,32 @@ int bt_action_callback(int action, struct gui_synclist *lists)
         }
         case ACTION_STD_OK: {
             bt_list_entry_t *entry = (bt_entries + (lists->selected_item / 2));
+            if (!entry->valid)
+                return ACTION_NONE;
             esp_err_t ret;
+            /* paging while an inquiry runs is unreliable; ESP-IDF's own
+             * A2DP source example stops discovery first too */
+            esp_bt_gap_cancel_discovery();
+            memcpy(bt_target_addr, entry->addr, ESP_BD_ADDR_LEN);
+            strlcpy(bt_target_name, entry->name, sizeof(bt_target_name));
+            bt_log("connect " ESP_BD_ADDR_STR " '%s'", ESP_BD_ADDR_HEX(entry->addr), entry->name);
             if ((ret = esp_a2d_source_connect(entry->addr)) != ESP_OK) {
-                panicf("%s a2dp connect failed: %d", __func__, ret);
+                bt_set_status(true, "Connect failed to start (%d)", ret);
+                return ACTION_NONE;
             }
+            bt_set_status(false, "Connecting to %s...", entry->name);
             return ACTION_NONE;
         }
         case ACTION_STD_CONTEXT: {
             bt_list_entry_t *entry = (bt_entries + (lists->selected_item / 2));
+            if (!entry->valid)
+                return ACTION_NONE;
             esp_err_t ret;
             if ((ret = esp_a2d_source_disconnect(entry->addr)) != ESP_OK) {
-                panicf("%s a2dp disconnect failed: %d", __func__, ret);
+                bt_set_status(true, "Disconnect failed (%d)", ret);
+                return ACTION_NONE;
             }
+            bt_set_status(false, "Disconnecting...");
             return ACTION_NONE;
         }
         case ACTION_STD_MENU: {
@@ -202,6 +303,8 @@ int bt_action_callback(int action, struct gui_synclist *lists)
             esp_bluedroid_disable();
             esp_bluedroid_deinit();
             bt_hci_disable();
+            bt_connected = false;
+            strlcpy(bt_status, BT_TITLE_HINT, sizeof(bt_status));
             return ACTION_STD_CANCEL;
         }
         default:
@@ -215,7 +318,9 @@ const char * bt_getname(int selected_item, void * data, char * buffer, size_t bu
     if (selected_item % 2 == 0) {
         return entry->name;
     } else {
-        if (entry->rssi == -128) {
+        if (bt_connected && memcmp(entry->addr, bt_target_addr, ESP_BD_ADDR_LEN) == 0) {
+            snprintf(buffer, buffer_len, "Connected (%s)", bt_codec_name());
+        } else if (entry->rssi == -128) {
             snprintf(buffer, buffer_len, ESP_BD_ADDR_STR " (Saved)", ESP_BD_ADDR_HEX(entry->addr));
         } else {
             snprintf(buffer, buffer_len, "%d dBm " ESP_BD_ADDR_STR, entry->rssi, ESP_BD_ADDR_HEX(entry->addr));
@@ -235,7 +340,8 @@ bool bt_scan(void)
         size++;
     }
 
-    simplelist_info_init(&info, "Play: connect  Menu: BT off", size, NULL);
+    bt_status_changed = false;
+    simplelist_info_init(&info, bt_status, size, NULL);
     info.scroll_all = false;
     info.selection_size = 2;
     info.action_callback = bt_action_callback;
@@ -314,6 +420,13 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
             return;
         case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
             logf("gap %d %d", event, param->disc_st_chg.state);
+            return;
+        case ESP_BT_GAP_AUTH_CMPL_EVT:
+            logf("gap auth " ESP_BD_ADDR_STR " stat %d", ESP_BD_ADDR_HEX(param->auth_cmpl.bda), param->auth_cmpl.stat);
+            if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS)
+                bt_set_status(false, "Paired, connecting audio...");
+            else
+                bt_set_status(true, "Pairing failed (%d)", param->auth_cmpl.stat);
             return;
         case ESP_BT_GAP_CFM_REQ_EVT:
             logf("gap %d %d", event, param->cfm_req.num_val);
@@ -489,15 +602,25 @@ bool bt_sink_resume(void) {
 static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
     switch (event) {
         case ESP_A2D_CONNECTION_STATE_EVT:
-            logf("a2d %d %d", event, param->conn_stat.state);
+            logf("a2d conn state %d rsn %d " ESP_BD_ADDR_STR, param->conn_stat.state, param->conn_stat.disc_rsn, ESP_BD_ADDR_HEX(param->conn_stat.remote_bda));
             if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
+                memcpy(bt_target_addr, param->conn_stat.remote_bda, ESP_BD_ADDR_LEN);
+                bt_connected = true;
+                bt_set_status(true, "Connected: %s", bt_target_name[0] ? bt_target_name : "headphones");
                 semaphore_init(&sink_control_sem, 1, 0);
                 queue_init(&sink_control_queue, false);
                 sink_suspended = 1;
                 sampr_switch_ongoing = false;
                 bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
                 esp_bt_gap_read_remote_name(param->conn_stat.remote_bda);
-            } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED || param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTING) {
+            } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
+                if (bt_connected)
+                    bt_set_status(true, param->conn_stat.disc_rsn == ESP_A2D_DISC_RSN_NORMAL ? "Disconnected" : "Connection lost");
+                else
+                    bt_set_status(true, "Could not connect (see bt_log.txt)");
+                bt_connected = false;
+            }
+            if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED || param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTING) {
                 if (current_codec != NULL) {
                     bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
                     current_codec->deinit();
@@ -519,6 +642,8 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                 bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
             } else if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_START && param->media_ctrl_stat.status == ESP_A2D_MEDIA_CTRL_ACK_SUCCESS) {
                 bt_current_state = ESP_A2D_AUDIO_STATE_STARTED;
+                bt_hci_log_stop(); /* capture covers setup; streaming would flood it */
+                bt_set_status(false, "Streaming: %s", bt_codec_name());
                 current_codec->feeding_reset();
                 create_thread(bt_codec_task, bt_codec_stack, DEFAULT_STACK_SIZE, 0, "bt_codec" IF_PRIO(, PRIORITY_BLUETOOTH));
             }
@@ -531,6 +656,8 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
             }
             return;
         case ESP_A2D_REPORT_SNK_CODEC_CAPS_EVT: {
+            if (current_codec == NULL)
+                return; /* no usable codec, already disconnecting */
             esp_a2d_mcc_t pref_mcc;
             struct a2dp_peer_info peer_info = {
                 .peer_mtu = param->a2d_report_snk_codec_caps_stat.mtu,
@@ -564,9 +691,13 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                     break;
                 }
             }
-            if (!done) { 
-                panicf("Unable to initialize suitable codec");
+            if (!done) {
+                current_codec = NULL;
+                bt_set_status(true, "No supported codec on headphones");
+                esp_a2d_source_disconnect(bt_target_addr);
+                return;
             }
+            logf("codec chosen: %s", bt_codec_name());
             break;
         }
         case ESP_A2D_SRC_SET_PREF_MCC_EVT:

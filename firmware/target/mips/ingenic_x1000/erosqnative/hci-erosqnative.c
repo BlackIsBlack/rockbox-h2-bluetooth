@@ -32,6 +32,10 @@
 #include "semaphore.h"
 #include "bcm_firmware.h"
 
+/* HCI capture to /.rockbox/bt_hci.pcap (open in Wireshark). It runs from
+ * BT enable until audio starts streaming, which covers pairing/connecting. */
+#define BT_DEBUG_PCAP
+
 #ifdef BT_DEBUG_PCAP
 #include "file.h"
 #include "mutex.h"
@@ -58,8 +62,8 @@ void hci_send_uart(uint8_t *data, uint16_t len) {
     if (hci_log_fd != -1) {
         mutex_lock(&hci_log_mutex);
         pcap_header_t header = {
-            .seconds = current_tick,
-            .microseconds = 0,
+            .seconds = current_tick / HZ,
+            .microseconds = (current_tick % HZ) * (1000000 / HZ),
             .captured_packet_length = len + 4,
             .original_packet_length = len + 4,
             .direction = 0x01000000,
@@ -135,8 +139,8 @@ size_t hci_recv_uart(uint8_t *data, size_t len) {
         if (hci_log_fd != -1) {
             mutex_lock(&hci_log_mutex);
             pcap_header_t header = {
-                .seconds = current_tick,
-                .microseconds = 0,
+                .seconds = current_tick / HZ,
+                .microseconds = (current_tick % HZ) * (1000000 / HZ),
                 .captured_packet_length = recvd + 4,
                 .original_packet_length = recvd + 4,
                 .direction = 0x00000000,
@@ -198,7 +202,7 @@ void bt_hci_enable(void)
     }
 
 #ifdef BT_DEBUG_PCAP
-    hci_log_fd = open("/hci_log.pcap", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    hci_log_fd = open(ROCKBOX_DIR "/bt_hci.pcap", O_WRONLY | O_CREAT | O_TRUNC, 0666);
     write(hci_log_fd, (uint8_t[]){0xD4, 0xC3, 0xB2, 0xA1, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xc9, 0x00, 0x00, 0x00}, 24);
     mutex_init(&hci_log_mutex);
 #endif
@@ -254,15 +258,23 @@ void bt_hci_enable(void)
     create_thread(bluetooth_hci_task, hci_stack, HCI_STACK_SIZE, 0, "bt_hci" IF_PRIO(, PRIORITY_BLUETOOTH));
 }
 
+void bt_hci_log_stop(void)
+{
+#ifdef BT_DEBUG_PCAP
+    if (hci_log_fd < 0)
+        return;
+    mutex_lock(&hci_log_mutex);
+    int old_fd = hci_log_fd;
+    hci_log_fd = -1;
+    close(old_fd);
+    mutex_unlock(&hci_log_mutex);
+#endif
+}
+
 void bt_hci_disable(void)
 {
     uart_deinit(PORT_UART0);
     gpio_set_level(GPIO_BT_REG_ON_HW4, 0);
     gpio_set_function(GPIO_PB(26), GPIOF_INPUT);
-#ifdef BT_DEBUG_PCAP
-    int old_fd = hci_log_fd;
-    hci_log_fd = -1;
-    if (old_fd != -1)
-        close(old_fd);
-#endif
+    bt_hci_log_stop();
 }

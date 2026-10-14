@@ -25,8 +25,7 @@ static inline uint32_t esp_log_timestamp(void) {
     return current_tick;
 }
 
-#ifdef ROCKBOX_HAS_LOGF
-#define esp_log_write(level, tag, format, ...) _logf(format, ##__VA_ARGS__)
-#else /* ROCKBOX_HAS_LOGF */
-#define esp_log_write(level, tag, format, ...) DEBUGF(format "\n", ##__VA_ARGS__)
-#endif /* ROCKBOX_HAS_LOGF */
+/* errors and warnings go to /.rockbox/bt_log.txt (apps/bluetooth/bt.c) */
+void bt_log(const char *fmt, ...);
+#define esp_log_write(level, tag, format, ...) \
+    do { if ((level) <= ESP_LOG_WARN) bt_log(format, ##__VA_ARGS__); } while (0)

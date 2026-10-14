@@ -226,6 +226,10 @@ void bt_hci_enable(void)
     create_thread(bluetooth_hci_task, hci_stack, (DEFAULT_STACK_SIZE + HCI_RECV_BUF_SIZE), 0, "bt_hci" IF_PRIO(, PRIORITY_BLUETOOTH));
 }
 
+void bt_hci_log_stop(void)
+{
+}
+
 void bt_hci_disable(void)
 {
     int old_fd = hci_log_fd;
