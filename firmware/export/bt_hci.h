@@ -31,7 +31,8 @@ void bt_hci_enable(void);
 // Guaranteed to be called after Bluedroid deinit.
 void bt_hci_disable(void);
 
-// Stops the HCI packet capture (if any). Safe to call repeatedly.
-void bt_hci_log_stop(void);
+// Closes the HCI packet capture after `packets` more packets (0 = now).
+// Safe to call repeatedly.
+void bt_hci_log_stop_after(int packets);
 
 #endif

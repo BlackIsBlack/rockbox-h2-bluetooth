@@ -643,7 +643,7 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                 bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
             } else if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_START && param->media_ctrl_stat.status == ESP_A2D_MEDIA_CTRL_ACK_SUCCESS) {
                 bt_current_state = ESP_A2D_AUDIO_STATE_STARTED;
-                bt_hci_log_stop(); /* capture covers setup; streaming would flood it */
+                bt_hci_log_stop_after(1500); /* setup + first ~10 s of audio */
                 bt_set_status(false, "Streaming: %s", bt_codec_name());
                 current_codec->feeding_reset();
                 create_thread(bt_codec_task, bt_codec_stack, DEFAULT_STACK_SIZE, 0, "bt_codec" IF_PRIO(, PRIORITY_BLUETOOTH));

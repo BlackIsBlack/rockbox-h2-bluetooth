@@ -43,6 +43,8 @@
 
 static int hci_log_fd = -1;
 static struct mutex hci_log_mutex;
+/* packets left before the capture closes; -1 = unlimited (fsync each) */
+static int hci_log_budget = -1;
 
 typedef struct {
     uint32_t seconds;
@@ -52,6 +54,31 @@ typedef struct {
     uint32_t direction;
 } pcap_header_t;
 
+static void hci_log_packet(uint32_t direction, const uint8_t *data, size_t len)
+{
+    if (hci_log_fd == -1)
+        return;
+    mutex_lock(&hci_log_mutex);
+    if (hci_log_fd != -1) {
+        pcap_header_t header = {
+            .seconds = current_tick / HZ,
+            .microseconds = (current_tick % HZ) * (1000000 / HZ),
+            .captured_packet_length = len + 4,
+            .original_packet_length = len + 4,
+            .direction = direction,
+        };
+        write(hci_log_fd, &header, 20);
+        write(hci_log_fd, data, len);
+        if (hci_log_budget < 0) {
+            fsync(hci_log_fd); /* setup phase: survive a panic */
+        } else if (--hci_log_budget <= 0) {
+            close(hci_log_fd);
+            hci_log_fd = -1;
+        }
+    }
+    mutex_unlock(&hci_log_mutex);
+}
+
 #define HCI_STACK_SIZE (DEFAULT_STACK_SIZE + HCI_RECV_BUF_SIZE + 1024)
 #else
 #define HCI_STACK_SIZE (DEFAULT_STACK_SIZE + HCI_RECV_BUF_SIZE)
@@ -59,20 +86,7 @@ typedef struct {
 
 void hci_send_uart(uint8_t *data, uint16_t len) {
 #ifdef BT_DEBUG_PCAP
-    if (hci_log_fd != -1) {
-        mutex_lock(&hci_log_mutex);
-        pcap_header_t header = {
-            .seconds = current_tick / HZ,
-            .microseconds = (current_tick % HZ) * (1000000 / HZ),
-            .captured_packet_length = len + 4,
-            .original_packet_length = len + 4,
-            .direction = 0x01000000,
-        };
-        write(hci_log_fd, &header, 20);
-        write(hci_log_fd, data, len);
-        fsync(hci_log_fd);
-        mutex_unlock(&hci_log_mutex);
-    }
+    hci_log_packet(0x01000000, data, len);
 #endif
     uart_tx(PORT_UART0, data, len);
 }
@@ -136,20 +150,7 @@ size_t hci_recv_uart(uint8_t *data, size_t len) {
             recvd += uart_rx(PORT_UART0, recvd + data, expected - recvd);
         }
 #ifdef BT_DEBUG_PCAP
-        if (hci_log_fd != -1) {
-            mutex_lock(&hci_log_mutex);
-            pcap_header_t header = {
-                .seconds = current_tick / HZ,
-                .microseconds = (current_tick % HZ) * (1000000 / HZ),
-                .captured_packet_length = recvd + 4,
-                .original_packet_length = recvd + 4,
-                .direction = 0x00000000,
-            };
-            write(hci_log_fd, &header, 20);
-            write(hci_log_fd, data, recvd);
-            fsync(hci_log_fd);
-            mutex_unlock(&hci_log_mutex);
-        }
+        hci_log_packet(0x00000000, data, recvd);
 #endif
     }
     return recvd;
@@ -202,6 +203,7 @@ void bt_hci_enable(void)
     }
 
 #ifdef BT_DEBUG_PCAP
+    hci_log_budget = -1;
     hci_log_fd = open(ROCKBOX_DIR "/bt_hci.pcap", O_WRONLY | O_CREAT | O_TRUNC, 0666);
     write(hci_log_fd, (uint8_t[]){0xD4, 0xC3, 0xB2, 0xA1, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xc9, 0x00, 0x00, 0x00}, 24);
     mutex_init(&hci_log_mutex);
@@ -258,15 +260,18 @@ void bt_hci_enable(void)
     create_thread(bluetooth_hci_task, hci_stack, HCI_STACK_SIZE, 0, "bt_hci" IF_PRIO(, PRIORITY_BLUETOOTH));
 }
 
-void bt_hci_log_stop(void)
+void bt_hci_log_stop_after(int packets)
 {
 #ifdef BT_DEBUG_PCAP
     if (hci_log_fd < 0)
         return;
     mutex_lock(&hci_log_mutex);
-    int old_fd = hci_log_fd;
-    hci_log_fd = -1;
-    close(old_fd);
+    if (packets > 0 && hci_log_budget < 0) {
+        hci_log_budget = packets;
+    } else if (packets <= 0) {
+        close(hci_log_fd);
+        hci_log_fd = -1;
+    }
     mutex_unlock(&hci_log_mutex);
 #endif
 }
@@ -276,5 +281,5 @@ void bt_hci_disable(void)
     uart_deinit(PORT_UART0);
     gpio_set_level(GPIO_BT_REG_ON_HW4, 0);
     gpio_set_function(GPIO_PB(26), GPIOF_INPUT);
-    bt_hci_log_stop();
+    bt_hci_log_stop_after(0);
 }
