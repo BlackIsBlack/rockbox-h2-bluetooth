@@ -1039,9 +1039,10 @@ QVariant ParseTreeNode::evalTag(const RBRenderInfo& info, bool conditional,
         {
             child = 1;
         }
-        else if(QString(element->tag->name) == "bl")
+        else if(QString(element->tag->name) == "bl"
+                || QString(element->tag->name) == "Bb")
         {
-            /* bl has to be scaled to the number of available children, but it
+            /* bl (and Bb, the headphone battery) has to be scaled to the number of available children, but it
              * also has an initial -1 value for an unknown state */
             child = val.toInt();
             if(child == -1)

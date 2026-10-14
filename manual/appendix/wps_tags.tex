@@ -130,6 +130,36 @@ show the information for the next song to be played.
     \config{\%bs} & Remaining time of the sleep timer (if it is set)\\
   \end{tagmap}
 
+\opt{bluetooth}{
+\section{Bluetooth}
+  \begin{tagmap}
+    \config{\%Bt} & Bluetooth state as a number: 0 when Bluetooth is off,
+                    1 when it is on with nothing connected, 2 when headphones
+                    are connected and 3 while audio is playing over Bluetooth.
+                    Meant for a conditional:
+                    \config{\%?Bt<off|on|connected|playing>}\\
+    \config{\%Bb} & Battery level of the connected headphones in percent,
+                    or empty when it isn't known. Works like \config{\%bl} in a
+                    conditional: \config{\%?Bb<unknown|0|1|\ldots|N>}, where
+                    the first option is used when no headphones are connected
+                    or they haven't reported a level, and the last one only at
+                    100 percent.\\
+  \end{tagmap}
+  Both tags read as off and unknown when \setting{Show Bluetooth Icon} is
+  turned off, so themes don't need to check that setting themselves.
+
+  Example, a four frame icon shown only while Bluetooth is on, and a
+  headphone battery shown only once it is known:
+\begin{example}
+  %xl(bt,bluetooth.bmp,0,0,4)
+  %xl(hpbatt,hp_battery.bmp,0,0,4)
+  %V(95,8,20,20,-)
+  %?Bt<|%xd(bt,1)|%xd(bt,3)|%xd(bt,4)>
+  %V(118,8,10,20,-)
+  %?Bb<|%xd(hpbatt,1)|%xd(hpbatt,2)|%xd(hpbatt,3)|%xd(hpbatt,4)|%xd(hpbatt,4)>
+\end{example}
+}
+
 \section{Information about the file}
   \begin{tagmap}
     \config{\%fb} & File Bitrate (in kbps)\\

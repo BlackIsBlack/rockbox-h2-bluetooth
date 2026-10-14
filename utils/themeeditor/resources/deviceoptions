@@ -130,6 +130,8 @@ bt ; Time Left (-1 for unknown) ; spin(-1,500); 100
 bp ; Charger Connected ; check ; true
 bc ; Charging ; check ; false
 bs ; Sleep Time Left ; spin(0,500) ; 100
+Bt ; Bluetooth State ; combo(Off, On, Connected, Playing) ; Connected
+Bb ; Headphone Battery (-1 for unknown) ; spin(-1,100) ; 80
 mh ; Hold Switch ; check ; true
 mr ; Remote Hold Switch ; check ; false
 lh ; Hard Disk Activity ; check ; true
