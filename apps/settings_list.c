@@ -36,6 +36,9 @@
 #include "videoout.h"
 #endif
 #include "rbpaths.h"
+#ifdef HAVE_BLUETOOTH
+#include "bluetooth/bt.h"
+#endif
 #include "settings_list.h"
 #include "usb.h"
 #include "audio.h"
@@ -1640,6 +1643,9 @@ const struct settings_list settings[] = {
                     UNIT_SEC, 3, 254, 1, NULL, NULL, STORAGE_FUNCTION(spindown)),
 #endif /* HAVE_DISK_STORAGE */
 #ifdef HAVE_BLUETOOTH
+    /* a setting so it can go on the Quick Screen / in Shortcuts */
+    OFFON_SETTING(F_CB_ONLY_IF_CHANGED, bt_power, LANG_BLUETOOTH, false,
+                  "bluetooth", bt_power_setting_changed),
     OFFON_SETTING(0, bt_on_startup, LANG_BLUETOOTH_ON_STARTUP, false,
                   "bluetooth on startup", NULL),
     OFFON_SETTING(0, bt_show_icon, LANG_BLUETOOTH_SHOW_ICON, true,

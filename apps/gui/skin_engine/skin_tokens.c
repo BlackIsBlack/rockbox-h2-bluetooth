@@ -1513,6 +1513,31 @@ const char *get_token_value(struct gui_wps *gwps,
             if (usb_inserted())
                 return "u";
             return NULL;
+        case SKIN_TOKEN_BLUETOOTH_BATTERY:
+        {
+            /* headphone battery %, like %bl: in %?Bb<...> the first
+             * option is "unknown/not connected", the rest split 0-100% */
+#ifdef HAVE_BLUETOOTH
+            int l = bt_get_battery();
+#else
+            int l = -1;
+#endif
+            if (intval) {
+                if (limit == TOKEN_VALUE_ONLY) {
+                    numeric_ret = l;
+                } else {
+                    limit = MAX(limit, 3);
+                    numeric_ret = l > -1 ? (limit - 2) * l / 100 + 2 : 1;
+                }
+            }
+            if (l > -1) {
+                itoa_buf(buf, buf_size, l);
+                numeric_buf = buf;
+            } else {
+                numeric_buf = "";
+            }
+            goto gtv_ret_numeric_tag_info;
+        }
         case SKIN_TOKEN_BLUETOOTH_STATUS:
         {
             /* 0 off, 1 on, 2 connected, 3 streaming: %?Bt<off|on|conn|play> */

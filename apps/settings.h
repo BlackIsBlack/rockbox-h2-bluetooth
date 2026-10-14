@@ -895,6 +895,7 @@ struct user_settings
     bool keyclick_hardware; /* hardware piezo keyclick */
 #endif
 #ifdef HAVE_BLUETOOTH
+    bool bt_power;          /* Bluetooth on (mirrors the real state) */
     bool bt_on_startup;     /* enable Bluetooth at boot */
     bool bt_show_icon;      /* Bluetooth icon in status bar / %Bt */
     bool bt_debug_log;      /* bt_log.txt + bt_hci.pcap */

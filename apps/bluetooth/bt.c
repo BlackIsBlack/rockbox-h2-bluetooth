@@ -41,6 +41,9 @@
 #include <stdarg.h>
 #include "mutex.h"
 #include "audio.h"
+#include "appevents.h"
+#include "playlist.h"
+#include "rb_avrc.h"
 #include "lang.h"
 #include "settings.h"
 #include "yesno.h"
@@ -160,6 +163,8 @@ static void bt_app_avrc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param
 
 static struct mutex bt_power_mutex; /* UI vs. startup thread */
 static bool bt_avrc_play_status_registered;
+static volatile bool bt_avrc_track_registered;
+static void bt_track_changed(unsigned short id, void *data);
 
 #define BT_LAST_FILE ROCKBOX_DIR "/bt_last.dat"
 
@@ -248,7 +253,11 @@ static void bt_app_hf_cb(esp_hf_cb_event_t event, esp_hf_cb_param_t *param)
             int pct = hfp_at_handle(param->unat_rep.unat, &reply, &ok);
             logf("hf AT%s -> %s%s", param->unat_rep.unat, reply ? reply : "", ok ? " OK" : "ERROR");
             if (pct >= 0 && pct != bt_batt_pct) {
+                char val[8];
                 bt_batt_pct = pct;
+                snprintf(val, sizeof(val), "%d", pct); /* "last seen" in Devices */
+                esp_bt_gap_set_bond_device_property(param->unat_rep.remote_addr, "RbBattery",
+                                                    val, strlen(val));
                 button_queue_post(BUTTON_REDRAW, 0); /* refresh Devices list */
             }
             if (!ok) {
@@ -326,6 +335,8 @@ static bool bt_enable(bool quiet)
     esp_avrc_rn_evt_cap_mask_t evt_set = {0};
     esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set,
                                         ESP_AVRC_RN_PLAY_STATUS_CHANGE);
+    esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set,
+                                        ESP_AVRC_RN_TRACK_CHANGE);
     if ((ret = esp_avrc_tg_set_rn_evt_cap(&evt_set)) != ESP_OK)
         bt_log("avrcp: play status notifications unavailable (%d)", ret);
     /* controller role: absolute volume */
@@ -363,6 +374,7 @@ static bool bt_enable(bool quiet)
         bt_entries[i].valid = true;
     }
     bt_entries[num_bonded_addrs].valid = false;
+    global_settings.bt_power = true;
     mutex_unlock(&bt_power_mutex);
     return true;
 
@@ -377,6 +389,7 @@ fail:
     esp_bluedroid_disable();
     esp_bluedroid_deinit();
     bt_hci_disable();
+    global_settings.bt_power = false;
     mutex_unlock(&bt_power_mutex);
     if (!quiet)
         splashf(HZ * 3, "Bluetooth failed to start (%s %d)", what, ret);
@@ -391,6 +404,7 @@ void bt_disable(void)
             bt_pause_playback();
         /* no AVRCP notifications once the stack is going away */
         bt_avrc_play_status_registered = false;
+        bt_avrc_track_registered = false;
         /* stop the codec thread before tearing the stack down */
         bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
         sleep(HZ / 10);
@@ -412,6 +426,7 @@ void bt_disable(void)
         }
         bt_log("--- bluetooth off ---");
     }
+    global_settings.bt_power = false;
     bt_connected = false;
     bt_batt_pct = -1;
     bt_abs_vol = false;
@@ -421,15 +436,16 @@ void bt_disable(void)
     mutex_unlock(&bt_power_mutex);
 }
 
-/* Settings > Bluetooth Settings > Bluetooth: On/Off */
-int bt_toggle(void)
+/* Setting "Bluetooth" (Bluetooth Settings, Quick Screen, Shortcuts).
+ * Turning it on also reconnects the last headphones. */
+void bt_power_setting_changed(bool on)
 {
-    if (bt_is_enabled()) {
+    if (on && !bt_is_enabled()) {
+        if (bt_enable(false))
+            bt_connect_last();
+    } else if (!on && bt_is_enabled()) {
         bt_disable();
-    } else if (bt_enable(false)) {
-        bt_connect_last();
     }
-    return 0;
 }
 
 static bool bluetooth_enable_discover(void)
@@ -466,10 +482,40 @@ static void bt_mgr_task(void)
 
 void bt_init(void)
 {
+    global_settings.bt_power = false; /* the saved value means nothing at boot */
     mutex_init(&bt_log_mutex);
     mutex_init(&bt_power_mutex);
+    add_event(PLAYBACK_EVENT_TRACK_CHANGE, bt_track_changed);
     create_thread(bt_mgr_task, bt_mgr_stack, sizeof(bt_mgr_stack), 0,
                   "bt_mgr" IF_PRIO(, PRIORITY_BACKGROUND));
+}
+
+static volatile bool bt_discovering;
+
+/* Devices list: row 0 is "Scan again", then one row per device */
+static int bt_entry_count(void)
+{
+    int size = 0;
+    while (size < BT_MAX_ENTRIES && bt_entries[size].valid)
+        size++;
+    return size;
+}
+
+static bt_list_entry_t *bt_entry_for_row(int selected_item)
+{
+    int i = selected_item / 2 - 1;
+    return (i >= 0 && i < bt_entry_count()) ? &bt_entries[i] : NULL;
+}
+
+/* last battery level we saw for a paired device, -1 if none */
+static int bt_saved_battery(const esp_bd_addr_t addr)
+{
+    char val[8];
+    size_t len = sizeof(val) - 1;
+    if (esp_bt_gap_get_bond_device_property((uint8_t *)addr, "RbBattery", val, &len) != ESP_OK)
+        return -1;
+    val[len] = 0;
+    return atoi(val);
 }
 
 int bt_action_callback(int action, struct gui_synclist *lists)
@@ -484,17 +530,20 @@ int bt_action_callback(int action, struct gui_synclist *lists)
                     splash(HZ * 2, bt_status);
                 }
             }
-            int size = 0;
-            while (bt_entries[size].valid && size < BT_MAX_ENTRIES) {
-                size++;
-            }
-            gui_synclist_set_nb_items(lists, size * 2);
+            gui_synclist_set_nb_items(lists, (bt_entry_count() + 1) * 2);
             return ACTION_REDRAW;
         }
         case ACTION_STD_OK: {
-            bt_list_entry_t *entry = (bt_entries + (lists->selected_item / 2));
-            if (!entry->valid)
-                return ACTION_NONE;
+            bt_list_entry_t *entry = bt_entry_for_row(lists->selected_item);
+            if (!entry) { /* "Scan again" */
+                esp_err_t ret = ESP_OK;
+                bt_idle_since = current_tick;
+                if (!bt_discovering)
+                    ret = esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 5, 0);
+                if (ret != ESP_OK)
+                    bt_set_status(true, "Scan failed (%d)", ret);
+                return ACTION_REDRAW;
+            }
             esp_err_t ret;
             /* paging while an inquiry runs is unreliable; ESP-IDF's own
              * A2DP source example stops discovery first too */
@@ -510,8 +559,8 @@ int bt_action_callback(int action, struct gui_synclist *lists)
             return ACTION_NONE;
         }
         case ACTION_STD_CONTEXT: {
-            bt_list_entry_t *entry = (bt_entries + (lists->selected_item / 2));
-            if (!entry->valid)
+            bt_list_entry_t *entry = bt_entry_for_row(lists->selected_item);
+            if (!entry)
                 return ACTION_NONE;
             esp_err_t ret;
             if ((ret = esp_a2d_source_disconnect(entry->addr)) != ESP_OK) {
@@ -531,22 +580,29 @@ int bt_action_callback(int action, struct gui_synclist *lists)
 
 const char * bt_getname(int selected_item, void * data, char * buffer, size_t buffer_len)
 {
-    bt_list_entry_t *entry = (bt_entries + (selected_item / 2));
-    if (selected_item % 2 == 0) {
+    (void)data;
+    bt_list_entry_t *entry = bt_entry_for_row(selected_item);
+    if (!entry) /* row 0 */
+        return selected_item % 2 == 0 ? "Scan again" : (bt_discovering ? "Searching..." : "");
+    if (selected_item % 2 == 0)
         return entry->name;
+
+    bool paired = entry->rssi == -128;
+    if (bt_connected && memcmp(entry->addr, bt_target_addr, ESP_BD_ADDR_LEN) == 0) {
+        if (bt_batt_pct >= 0)
+            snprintf(buffer, buffer_len, "Connected (%s)  Battery %d%%", bt_codec_name(), bt_batt_pct);
+        else
+            snprintf(buffer, buffer_len, "Connected (%s)", bt_codec_name());
+    } else if (paired) {
+        int batt = bt_saved_battery(entry->addr);
+        if (batt >= 0)
+            snprintf(buffer, buffer_len, "Paired  Battery %d%% (last seen)", batt);
+        else
+            snprintf(buffer, buffer_len, "Paired");
     } else {
-        if (bt_connected && memcmp(entry->addr, bt_target_addr, ESP_BD_ADDR_LEN) == 0) {
-            if (bt_batt_pct >= 0)
-                snprintf(buffer, buffer_len, "Connected (%s)  Battery %d%%", bt_codec_name(), bt_batt_pct);
-            else
-                snprintf(buffer, buffer_len, "Connected (%s)", bt_codec_name());
-        } else if (entry->rssi == -128) {
-            snprintf(buffer, buffer_len, ESP_BD_ADDR_STR " (Saved)", ESP_BD_ADDR_HEX(entry->addr));
-        } else {
-            snprintf(buffer, buffer_len, "%d dBm " ESP_BD_ADDR_STR, entry->rssi, ESP_BD_ADDR_HEX(entry->addr));
-        }
-        return buffer;
+        snprintf(buffer, buffer_len, "%d dBm", entry->rssi);
     }
+    return buffer;
 }
 
 bool bt_scan(void)
@@ -557,13 +613,9 @@ bool bt_scan(void)
     if (!bluetooth_enable_discover())
         return false;
     bt_idle_since = current_tick; /* don't auto-off while picking a device */
-    int size = 0;
-    while (bt_entries[size].valid && size < BT_MAX_ENTRIES) {
-        size++;
-    }
 
     bt_status_changed = false;
-    simplelist_info_init(&info, bt_status, size, NULL);
+    simplelist_info_init(&info, bt_status, (bt_entry_count() + 1) * 2, NULL);
     info.scroll_all = false;
     info.selection_size = 2;
     info.action_callback = bt_action_callback;
@@ -576,7 +628,7 @@ static void process_inquiry_scan_result(esp_bt_gap_cb_param_t *param)
     uint32_t cod = 0;     /* class of device */
     uint8_t *eir = NULL;
     esp_bt_gap_dev_prop_t *p;
-    int8_t rssi;
+    int8_t rssi = -127;
 
     for (int i = 0; i < param->disc_res.num_prop; i++) {
         p = param->disc_res.prop + i;
@@ -594,14 +646,13 @@ static void process_inquiry_scan_result(esp_bt_gap_cb_param_t *param)
         }
     }
 
-    // /* search for device with MAJOR service class as "rendering" and "audio" in COD */
-    // if (!esp_bt_gap_is_valid_cod(cod) ||
-    //         !(esp_bt_gap_get_cod_srvc(cod) & ESP_BT_COD_SRVC_RENDERING) ||
-    //         !(esp_bt_gap_get_cod_srvc(cod) & ESP_BT_COD_SRVC_AUDIO)) {
-    //     return;
-    // }
-
     if (!esp_bt_gap_is_valid_cod(cod) || eir == NULL) {
+        return;
+    }
+    /* only things that can play our audio: audio/video devices, or
+     * anything advertising the audio/rendering service */
+    if (esp_bt_gap_get_cod_major_dev(cod) != ESP_BT_COD_MAJOR_DEV_AV &&
+        !(esp_bt_gap_get_cod_srvc(cod) & (ESP_BT_COD_SRVC_AUDIO | ESP_BT_COD_SRVC_RENDERING))) {
         return;
     }
 
@@ -624,6 +675,8 @@ static void process_inquiry_scan_result(esp_bt_gap_cb_param_t *param)
         i++;
     }
     if (i < BT_MAX_ENTRIES) {
+        if (!bt_entries[i].valid)
+            bt_entries[i + 1].valid = false; /* new last entry: end the list */
         memcpy(bt_entries[i].addr, param->disc_res.bda, ESP_BD_ADDR_LEN);
         memcpy(bt_entries[i].name, rmt_bdname, bdname_len);
         bt_entries[i].name[bdname_len] = '\0';
@@ -642,6 +695,8 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
             return;
         case ESP_BT_GAP_DISC_STATE_CHANGED_EVT:
             logf("gap %d %d", event, param->disc_st_chg.state);
+            bt_discovering = param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STARTED;
+            button_queue_post(BUTTON_REDRAW, 0);
             return;
         case ESP_BT_GAP_AUTH_CMPL_EVT:
             logf("gap auth " ESP_BD_ADDR_STR " stat %d", ESP_BD_ADDR_HEX(param->auth_cmpl.bda), param->auth_cmpl.stat);
@@ -854,6 +909,13 @@ static void bt_codec_task(void)
     thread_exit();
 }
 
+int bt_get_battery(void)
+{
+    if (!global_settings.bt_show_icon || !bt_connected)
+        return -1;
+    return bt_batt_pct;
+}
+
 int bt_get_status_level(void)
 {
     if (!global_settings.bt_show_icon || !bt_is_enabled())
@@ -1047,11 +1109,8 @@ static esp_avrc_playback_stat_t bt_play_status(void)
 }
 
 /* tell the headphones we started/stopped (they re-register after each) */
-void btc_avrc_tg_cache_play_status(uint8_t play_status); /* btc_avrc.c */
-
 static void bt_notify_play_status(esp_avrc_playback_stat_t st)
 {
-    btc_avrc_tg_cache_play_status(st); /* for GetPlayStatus */
     if (!bt_avrc_play_status_registered)
         return;
     bt_avrc_play_status_registered = false;
@@ -1185,6 +1244,44 @@ static void bt_app_avrc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param
     }
 }
 
+/* AVRCP now-playing info (rb_avrc.h): called from the BTC thread when a
+ * car stereo / watch asks for the title etc. */
+void rb_avrc_get_track_info(rb_avrc_track_info_t *info)
+{
+    memset(info, 0, sizeof(*info));
+    info->play_status = bt_play_status();
+    struct mp3entry *id3 = audio_current_track();
+    if (!id3 || !(audio_status() & AUDIO_STATUS_PLAY))
+        return;
+    const char *title = id3->title;
+    if (!title || !*title) { /* untagged: use the file name */
+        title = strrchr(id3->path, '/');
+        title = title ? title + 1 : id3->path;
+    }
+    info->has_track = true;
+    strlcpy(info->title, title, sizeof(info->title));
+    strlcpy(info->artist, id3->artist ? id3->artist :
+                          (id3->albumartist ? id3->albumartist : ""), sizeof(info->artist));
+    strlcpy(info->album, id3->album ? id3->album : "", sizeof(info->album));
+    strlcpy(info->genre, id3->genre_string ? id3->genre_string : "", sizeof(info->genre));
+    info->track_no = playlist_get_display_index();
+    info->total_tracks = playlist_amount();
+    info->length_ms = id3->length;
+    info->position_ms = id3->elapsed;
+}
+
+/* PLAYBACK_EVENT_TRACK_CHANGE: let displays fetch the new title */
+static void bt_track_changed(unsigned short id, void *data)
+{
+    (void)id; (void)data;
+    if (!bt_avrc_track_registered)
+        return;
+    bt_avrc_track_registered = false; /* the controller re-registers */
+    esp_avrc_rn_param_t rn;
+    memset(rn.elm_id, 0, sizeof(rn.elm_id));
+    esp_avrc_tg_send_rn_rsp(ESP_AVRC_RN_TRACK_CHANGE, ESP_AVRC_RN_RSP_CHANGED, &rn);
+}
+
 static void bt_app_avrc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param_t *param) {
     switch (event) {
         case ESP_AVRC_TG_CONNECTION_STATE_EVT:
@@ -1224,9 +1321,15 @@ static void bt_app_avrc_tg_cb(esp_avrc_tg_cb_event_t event, esp_avrc_tg_cb_param
             break;
         case ESP_AVRC_TG_REGISTER_NOTIFICATION_EVT:
             logf("avrc-tg %d %d", event, param->reg_ntf.event_id);
+            if (param->reg_ntf.event_id == ESP_AVRC_RN_TRACK_CHANGE) {
+                esp_avrc_rn_param_t rn;
+                /* 0 = a track is selected, all 0xFF = none */
+                memset(rn.elm_id, (audio_status() & AUDIO_STATUS_PLAY) ? 0x00 : 0xFF, sizeof(rn.elm_id));
+                bt_avrc_track_registered = true;
+                esp_avrc_tg_send_rn_rsp(ESP_AVRC_RN_TRACK_CHANGE, ESP_AVRC_RN_RSP_INTERIM, &rn);
+            }
             if (param->reg_ntf.event_id == ESP_AVRC_RN_PLAY_STATUS_CHANGE) {
                 esp_avrc_rn_param_t rn = { .playback = bt_play_status() };
-                btc_avrc_tg_cache_play_status(rn.playback);
                 bt_avrc_play_status_registered = true;
                 esp_avrc_tg_send_rn_rsp(ESP_AVRC_RN_PLAY_STATUS_CHANGE, ESP_AVRC_RN_RSP_INTERIM, &rn);
             }

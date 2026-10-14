@@ -76,10 +76,10 @@ const static uint16_t cs_psth_allowed_cmd[8] = {
 const static uint16_t cs_psth_dft_supported_cmd[8] = {0};
 static uint16_t s_psth_supported_cmd[8];
 
-/* Rockbox: also allow play_status (bit 1) so headphones can track
- * playback, which in-ear detection needs */
+/* Rockbox: also allow play_status (bit 1, in-ear detection needs it) and
+ * track_chg (bit 2, displays refresh the title) */
 const static uint16_t cs_rn_allowed_evt = \
-        0x2002; /* bit mask: 0=rsvd, 1=play_status, 2=track_chg, 3=reached_end,
+        0x2006; /* bit mask: 0=rsvd, 1=play_status, 2=track_chg, 3=reached_end,
                              4=reached_start, 5=pos_chg, 6=batt_status, 7=sys_status_chg,
                              8=player_app_setting, 9=now_playing_content, 10=avail_players, 11=addressed_player,
                              12=UID, 13=volume_chg */
@@ -87,13 +87,9 @@ const static uint16_t cs_rn_allowed_evt = \
 const static uint16_t cs_rn_dft_supported_evt = 0;
 static uint16_t s_rn_supported_evt;
 
-/* Rockbox: last play status from the app, for GetPlayStatus */
-static UINT8 s_tg_play_status = AVRC_PLAYSTATE_STOPPED;
-
-void btc_avrc_tg_cache_play_status(UINT8 play_status)
-{
-    s_tg_play_status = play_status;
-}
+/* Rockbox: now-playing info comes from the app on request */
+#include "rb_avrc.h"
+static rb_avrc_track_info_t s_tg_track_info; /* BTC thread only */
 
 // event ids supported to register as CT
 const static uint16_t cs_ct_rn_supported_evt = \
@@ -895,17 +891,54 @@ static void btc_rc_upstreams_evt(UINT16 event, tAVRC_COMMAND *pavrc_cmd, UINT8 c
     break;
     case AVRC_PDU_GET_PLAY_STATUS: { /* Rockbox: answer instead of rejecting */
         tAVRC_RESPONSE avrc_rsp;
+        rb_avrc_track_info_t *ti = &s_tg_track_info;
+        rb_avrc_get_track_info(ti);
         memset(&avrc_rsp, 0, sizeof(avrc_rsp));
         avrc_rsp.get_play_status.pdu = AVRC_PDU_GET_PLAY_STATUS;
         avrc_rsp.get_play_status.opcode = opcode_from_pdu(AVRC_PDU_GET_PLAY_STATUS);
         avrc_rsp.get_play_status.status = AVRC_STS_NO_ERROR;
-        avrc_rsp.get_play_status.song_len = 0xFFFFFFFF; /* unknown */
-        avrc_rsp.get_play_status.song_pos = 0xFFFFFFFF;
-        avrc_rsp.get_play_status.play_status = s_tg_play_status;
+        avrc_rsp.get_play_status.song_len = ti->has_track ? ti->length_ms : 0xFFFFFFFF;
+        avrc_rsp.get_play_status.song_pos = ti->has_track ? ti->position_ms : 0xFFFFFFFF;
+        avrc_rsp.get_play_status.play_status = ti->play_status;
         send_metamsg_rsp(btc_rc_cb.rc_handle, label, AVRC_RSP_IMPL_STBL, &avrc_rsp);
     }
     break;
-    case AVRC_PDU_GET_ELEMENT_ATTR:
+    case AVRC_PDU_GET_ELEMENT_ATTR: { /* Rockbox: title/artist/album... */
+        static char nums[3][12];
+        tAVRC_ATTR_ENTRY attrs[7];
+        tAVRC_RESPONSE avrc_rsp;
+        rb_avrc_track_info_t *ti = &s_tg_track_info;
+        rb_avrc_get_track_info(ti);
+        snprintf(nums[0], sizeof(nums[0]), "%lu", (unsigned long)ti->track_no);
+        snprintf(nums[1], sizeof(nums[1]), "%lu", (unsigned long)ti->total_tracks);
+        snprintf(nums[2], sizeof(nums[2]), "%lu", (unsigned long)ti->length_ms);
+        const char *vals[7] = { ti->title, ti->artist, ti->album, nums[0], nums[1], ti->genre, nums[2] };
+
+        UINT8 n = 0;
+        UINT8 want = pavrc_cmd->get_elem_attrs.num_attr;
+        for (UINT32 id = AVRC_MEDIA_ATTR_ID_TITLE; id <= AVRC_MEDIA_ATTR_ID_PLAYING_TIME; id++) {
+            bool requested = (want == 0);   /* 0 = all attributes */
+            for (UINT8 k = 0; k < want && k < AVRC_MAX_ELEM_ATTR_SIZE; k++)
+                if (pavrc_cmd->get_elem_attrs.attrs[k] == id)
+                    requested = true;
+            if (!requested)
+                continue;
+            const char *v = ti->has_track ? vals[id - 1] : "";
+            attrs[n].attr_id = id;
+            attrs[n].name.charset_id = AVRC_CHARSET_ID_UTF8;
+            attrs[n].name.str_len = strlen(v);
+            attrs[n].name.p_str = (UINT8 *)v;
+            n++;
+        }
+        memset(&avrc_rsp, 0, sizeof(avrc_rsp));
+        avrc_rsp.get_elem_attrs.pdu = AVRC_PDU_GET_ELEMENT_ATTR;
+        avrc_rsp.get_elem_attrs.opcode = opcode_from_pdu(AVRC_PDU_GET_ELEMENT_ATTR);
+        avrc_rsp.get_elem_attrs.status = AVRC_STS_NO_ERROR;
+        avrc_rsp.get_elem_attrs.num_attr = n;
+        avrc_rsp.get_elem_attrs.p_attrs = attrs;
+        send_metamsg_rsp(btc_rc_cb.rc_handle, label, AVRC_RSP_IMPL_STBL, &avrc_rsp);
+    }
+    break;
     case AVRC_PDU_INFORM_DISPLAY_CHARSET:
     //todo: check the valid response for these PDUs
     case AVRC_PDU_LIST_PLAYER_APP_ATTR:
@@ -1743,6 +1776,9 @@ static void btc_avrc_tg_send_rn_rsp(esp_avrc_rn_event_ids_t event_id, esp_avrc_r
         break;
     case ESP_AVRC_RN_PLAY_STATUS_CHANGE: /* Rockbox */
         avrc_rsp.reg_notif.param.play_status = param->playback;
+        break;
+    case ESP_AVRC_RN_TRACK_CHANGE: /* Rockbox */
+        memcpy(avrc_rsp.reg_notif.param.track, param->elm_id, sizeof(avrc_rsp.reg_notif.param.track));
         break;
     // todo: implement other event notifications
     default:
