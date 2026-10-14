@@ -126,16 +126,16 @@ void a2dp_sbc_encoder_init(struct pcm_sink_caps *caps, const struct a2dp_peer_in
   memset(&a2dp_sbc_encoder_cb, 0, sizeof(a2dp_sbc_encoder_cb));
 
   int i = 0;
-  if (peer->peer_caps->cie.sbc_info.samp_freq | ESP_A2D_SBC_CIE_SF_48K) {
+  if (peer->peer_caps->cie.sbc_info.samp_freq & ESP_A2D_SBC_CIE_SF_48K) {
     bt_sbc_sampr[i++] = SAMPR_48;
   }
-  if (peer->peer_caps->cie.sbc_info.samp_freq | ESP_A2D_SBC_CIE_SF_44K) {
+  if (peer->peer_caps->cie.sbc_info.samp_freq & ESP_A2D_SBC_CIE_SF_44K) {
     bt_sbc_sampr[i++] = SAMPR_44;
   }
-  if (peer->peer_caps->cie.sbc_info.samp_freq | ESP_A2D_SBC_CIE_SF_32K) {
+  if (peer->peer_caps->cie.sbc_info.samp_freq & ESP_A2D_SBC_CIE_SF_32K) {
     bt_sbc_sampr[i++] = SAMPR_32;
   }
-  if (peer->peer_caps->cie.sbc_info.samp_freq | ESP_A2D_SBC_CIE_SF_16K) {
+  if (peer->peer_caps->cie.sbc_info.samp_freq & ESP_A2D_SBC_CIE_SF_16K) {
     bt_sbc_sampr[i++] = SAMPR_16;
   }
   caps->samprs = bt_sbc_sampr;

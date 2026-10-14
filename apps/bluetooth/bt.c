@@ -960,6 +960,27 @@ bool bt_sink_resume(void) {
     return false;
 }
 
+/* One sample rate per connection. Changing it mid-stream needs an AVDTP
+ * reconfigure; when the headphones didn't take it, the encoder ran at one
+ * rate and the headphones at another (songs fast and high pitched).
+ * 44.1 kHz is mandatory for SBC sinks and Rockbox resamples the rest. */
+static unsigned long bt_pinned_rate[1];
+
+static void bt_pin_rate(esp_a2d_mcc_t *pref_mcc)
+{
+    struct pcm_sink_caps *c = &bt_pcm_sink.caps;
+    unsigned long rate = c->samprs[c->default_freq];
+    for (int i = 0; i < c->num_samprs; i++)
+        if (c->samprs[i] == SAMPR_44)
+            rate = SAMPR_44;
+    current_codec->set_freq(rate, pref_mcc); /* encoder and offered config agree */
+    bt_pinned_rate[0] = rate;
+    c->samprs = bt_pinned_rate;
+    c->num_samprs = 1;
+    c->default_freq = 0;
+    logf("codec %s pinned to %lu Hz", bt_codec_name(), rate);
+}
+
 static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
     switch (event) {
         case ESP_A2D_CONNECTION_STATE_EVT:
@@ -1038,6 +1059,7 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
             };
             conn_hdl = param->a2d_report_snk_codec_caps_stat.conn_hdl;
             current_codec->init(&bt_pcm_sink.caps, &peer_info, &pref_mcc);
+            bt_pin_rate(&pref_mcc);
             esp_err_t ret = esp_a2d_source_set_pref_mcc(param->a2d_report_snk_codec_caps_stat.conn_hdl, &pref_mcc);
 
             if (ret != ESP_OK) {
@@ -1084,6 +1106,9 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
         }
         case ESP_A2D_SRC_SET_PREF_MCC_EVT:
             logf("a2d %d %d", event, param->a2d_set_pref_mcc_stat.set_status);
+            if (param->a2d_set_pref_mcc_stat.set_status != ESP_BT_STATUS_SUCCESS)
+                bt_log("headphones rejected the codec config (%d)",
+                       param->a2d_set_pref_mcc_stat.set_status);
             if (sampr_switch_ongoing) {
                 sampr_switch_ongoing = false;
                 logf("starting playback: sampr switch done");
@@ -1360,6 +1385,9 @@ void bt_sink_unlock(void) {
 }
 
 void bt_sink_set_freq(uint16_t freq) {
+    /* the rate is pinned per connection (bt_pin_rate): nothing to switch */
+    if (current_codec == NULL || bt_pcm_sink.caps.num_samprs <= 1)
+        return;
     sampr_switch_ongoing = true;
 
     logf("suspending playback: sampr switch start, to %d", freq);
