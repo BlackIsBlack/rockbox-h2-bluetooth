@@ -79,7 +79,8 @@ static void hci_log_packet(uint32_t direction, const uint8_t *data, size_t len)
     mutex_unlock(&hci_log_mutex);
 }
 
-#define HCI_STACK_SIZE (DEFAULT_STACK_SIZE + HCI_RECV_BUF_SIZE + 1024)
+/* the capture writes to the SD card from this thread; FS calls go deep */
+#define HCI_STACK_SIZE (DEFAULT_STACK_SIZE + HCI_RECV_BUF_SIZE + 8192)
 #else
 #define HCI_STACK_SIZE (DEFAULT_STACK_SIZE + HCI_RECV_BUF_SIZE)
 #endif

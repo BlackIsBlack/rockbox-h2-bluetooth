@@ -47,19 +47,9 @@ static long bt_log_size;
 
 void bt_log(const char *fmt, ...)
 {
-    char buf[256];
-    int n = snprintf(buf, sizeof(buf), "%ld.%02ld ",
-                     current_tick / HZ, current_tick % HZ);
-    va_list ap;
-    va_start(ap, fmt);
-    n += vsnprintf(buf + n, sizeof(buf) - n, fmt, ap);
-    va_end(ap);
-    if (n >= (int)sizeof(buf) - 1)
-        n = sizeof(buf) - 2;
-    if (n > 0 && buf[n - 1] != '\n')
-        buf[n++] = '\n';
-
-    if (bt_log_fd == -2) {
+    /* static: Bluedroid threads that log only have ~3 KiB of stack */
+    static char buf[256];
+    if (bt_log_fd == -2) { /* first call is from the UI thread, see enable */
         mutex_init(&bt_log_mutex);
         bt_log_fd = open(ROCKBOX_DIR "/bt_log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
         bt_log_size = bt_log_fd >= 0 ? ffilesize(bt_log_fd) : 0;
@@ -71,6 +61,17 @@ void bt_log(const char *fmt, ...)
     if (bt_log_fd < 0)
         return;
     mutex_lock(&bt_log_mutex);
+    int n = snprintf(buf, sizeof(buf), "%ld.%02ld ",
+                     current_tick / HZ, current_tick % HZ);
+    va_list ap;
+    va_start(ap, fmt);
+    n += vsnprintf(buf + n, sizeof(buf) - n, fmt, ap);
+    va_end(ap);
+    if (n >= (int)sizeof(buf) - 1)
+        n = sizeof(buf) - 2;
+    if (n > 0 && buf[n - 1] != '\n')
+        buf[n++] = '\n';
+
     if (bt_log_size + n <= BT_LOG_MAX) {
         write(bt_log_fd, buf, n);
         fsync(bt_log_fd); /* survive a panic */
@@ -145,6 +146,7 @@ void bluetooth_enable_discover(void)
     esp_err_t ret;
     if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
         splashf(0, "Enabling bluetooth...");
+        bt_log("--- enabling bluetooth ---"); /* opens the log on the UI thread */
         bt_hci_enable();
         esp_bluedroid_config_t cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
         cfg.sc_en = true;
@@ -534,7 +536,11 @@ bool bt_heap_info(void)
 
 static esp_a2d_audio_state_t bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
 
-uint32_t bt_codec_stack[DEFAULT_STACK_SIZE / sizeof(uint32_t)];
+/* The codec thread pulls PCM from the mixer (normally done on the IRQ
+ * stack), runs the encoder and calls into Bluedroid; MIPS's 1 KiB
+ * DEFAULT_STACK_SIZE overflowed after a while. */
+#define BT_CODEC_STACK_SIZE (32 * 1024)
+uint32_t bt_codec_stack[BT_CODEC_STACK_SIZE / sizeof(uint32_t)];
 
 
 static void bt_codec_task(void)
@@ -646,7 +652,7 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                 bt_hci_log_stop_after(1500); /* setup + first ~10 s of audio */
                 bt_set_status(false, "Streaming: %s", bt_codec_name());
                 current_codec->feeding_reset();
-                create_thread(bt_codec_task, bt_codec_stack, DEFAULT_STACK_SIZE, 0, "bt_codec" IF_PRIO(, PRIORITY_BLUETOOTH));
+                create_thread(bt_codec_task, bt_codec_stack, BT_CODEC_STACK_SIZE, 0, "bt_codec" IF_PRIO(, PRIORITY_BLUETOOTH));
             }
             struct queue_event ev;
             queue_wait_w_tmo(&sink_control_queue, &ev, TIMEOUT_NOBLOCK);
