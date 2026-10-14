@@ -95,7 +95,7 @@ size_t hci_recv_uart(uint8_t *data, size_t len) {
             while (recvd < 5) {
                 recvd += uart_rx(PORT_UART0, recvd + data, 5 - recvd);
             }
-            expected = ((((size_t) data[3]) & 0xFF) | ((((size_t) data[4]) << 8) & 0xFF)) + 5;
+            expected = ((((size_t) data[3]) & 0xFF) | (((size_t) data[4]) << 8)) + 5;
         } else if (data[0] == 0x03) {
             if (len < 4) {
                 panicf("hci recv buffer too small, got %u but wanted at least 4", len);
@@ -119,7 +119,7 @@ size_t hci_recv_uart(uint8_t *data, size_t len) {
             while (recvd < 5) {
                 recvd += uart_rx(PORT_UART0, recvd + data, 5 - recvd);
             }
-            expected = ((((size_t) data[3]) & 0xFF) | ((((size_t) data[4]) << 8) & 0xFF)) + 5;
+            expected = ((((size_t) data[3]) & 0xFF) | (((size_t) data[4]) << 8)) + 5;
         } else {
             // Unknown frame type.
             // Panic.
@@ -204,7 +204,13 @@ void bt_hci_enable(void)
 #endif
 
     uart_init(PORT_UART0, 115200);
+
+    /* Same order as the OF kernel: 32 kHz LPO clock out on PB26 first,
+     * then BT_REG_ON. The chip needs time to boot before it answers. */
+    gpio_set_function(GPIO_PB(26), GPIOF_DEVICE(0));
+    sleep(HZ / 100 + 1);
     gpio_set_level(GPIO_BT_REG_ON_HW4, 1);
+    sleep(HZ / 10);
 
     // HCI_Reset
     hci_send_uart((uint8_t[]){0x01, 0x03, 0x0c, 0x00}, 4);
@@ -220,6 +226,9 @@ void bt_hci_enable(void)
         hci_send_uart(*i, ((size_t) (*i)[3]) + 4);
         hci_recv_uart(buf, HCI_RECV_BUF_SIZE);
     }
+
+    /* Launch_RAM reboots the chip; Linux btbcm waits 250 ms here too */
+    sleep(HZ / 4);
 
     // HCI_Reset
     hci_send_uart((uint8_t[]){0x01, 0x03, 0x0c, 0x00}, 4);
@@ -249,6 +258,7 @@ void bt_hci_disable(void)
 {
     uart_deinit(PORT_UART0);
     gpio_set_level(GPIO_BT_REG_ON_HW4, 0);
+    gpio_set_function(GPIO_PB(26), GPIOF_INPUT);
 #ifdef BT_DEBUG_PCAP
     int old_fd = hci_log_fd;
     hci_log_fd = -1;

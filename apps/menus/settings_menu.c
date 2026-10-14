@@ -432,8 +432,16 @@ MAKE_MENU(usb_menu, ID2P(LANG_USB_MENU), 0, Icon_NOICON,
 #endif
          );
 
+#ifdef HAVE_BLUETOOTH
+#include "bluetooth/bt.h"
+MENUITEM_FUNCTION(bluetooth_item, 0, "Bluetooth", bt_scan, NULL, Icon_NOICON);
+#endif
+
 MAKE_MENU(system_menu, ID2P(LANG_SYSTEM),
           0, Icon_System_menu,
+#ifdef HAVE_BLUETOOTH
+            &bluetooth_item,
+#endif
 #if (BATTERY_CAPACITY_INC > 0) || defined(HAVE_USB_CHARGING_ENABLE)
             &battery_menu,
 #endif

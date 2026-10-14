@@ -105,7 +105,7 @@ void a2dp_vendor_aptx_hd_encoder_init(struct pcm_sink_caps *caps, const struct a
   caps->samprs = bt_aptx_hd_sampr;
   caps->default_freq = 0;
   caps->num_samprs = i;
-  caps->volume_type = PCM_SINK_HWVOL;
+  caps->volume_type = PCM_SINK_SWVOL;
 
   a2dp_aptx_hd_encoder_cb.stats.session_start_us = current_tick;
 
