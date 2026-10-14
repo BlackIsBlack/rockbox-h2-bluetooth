@@ -153,6 +153,17 @@ static bool bt_avrc_play_status_registered;
 
 #define BT_LAST_FILE ROCKBOX_DIR "/bt_last.dat"
 
+/* Losing the headphones pauses playback, like a wired unplug. Called
+ * before audio is switched back to the DAC so nothing leaks out there. */
+static void bt_pause_playback(void)
+{
+    int st = audio_status();
+    if ((st & AUDIO_STATUS_PLAY) && !(st & AUDIO_STATUS_PAUSE)) {
+        bt_log("pausing playback: bluetooth disconnected");
+        audio_pause();
+    }
+}
+
 bool bt_is_enabled(void)
 {
     return esp_bluedroid_get_status() == ESP_BLUEDROID_STATUS_ENABLED;
@@ -308,6 +319,8 @@ void bt_disable(void)
 {
     mutex_lock(&bt_power_mutex);
     if (bt_is_enabled()) {
+        if (bt_connected)
+            bt_pause_playback();
         /* no AVRCP notifications once the stack is going away */
         bt_avrc_play_status_registered = false;
         /* stop the codec thread before tearing the stack down */
@@ -824,6 +837,7 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
             }
             if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED || param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTING) {
                 if (current_codec != NULL) {
+                    bt_pause_playback();
                     bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
                     current_codec->deinit();
                     current_codec = NULL;
