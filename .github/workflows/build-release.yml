@@ -1,0 +1,99 @@
+name: Build and release
+
+# Every PR gets built so broken builds show up before merging. Merging into
+# main (or master) also publishes a release with the zip attached.
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  erosqnative:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the version string comes from git describe
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            texinfo automake autoconf libtool libtool-bin flex bison \
+            libgmp-dev libmpfr-dev libmpc-dev zip
+
+      # Building gcc takes around 20 minutes, so keep it between runs. It
+      # only gets rebuilt when the toolchain script or its patches change.
+      - name: Cache the toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/rbdev
+          key: mipsel-elf-${{ hashFiles('tools/rockboxdev.sh', 'tools/toolchain-patches/**') }}
+
+      - name: Build the toolchain
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        working-directory: tools
+        run: |
+          RBDEV_PREFIX="$HOME/rbdev" \
+          RBDEV_DOWNLOAD="$RUNNER_TEMP/dl" \
+          RBDEV_BUILD="$RUNNER_TEMP/build" \
+          GNU_MIRROR=https://ftp.gnu.org/gnu \
+          MAKEFLAGS="-j$(nproc)" \
+          ./rockboxdev.sh --target=i
+
+      - name: Build erosqnative
+        run: |
+          export PATH="$HOME/rbdev/bin:$PATH"
+          mkdir build && cd build
+          ../tools/configure --target=erosqnative --type=n
+          make -j"$(nproc)"
+          make zip
+          grep -E '^(Version|Binary size|RAM usage)' rockbox-info.txt
+
+      - name: Name the build
+        id: name
+        run: |
+          short="${GITHUB_SHA::7}"
+          echo "tag=h2-bt-$(date -u +%Y%m%d)-$short" >> "$GITHUB_OUTPUT"
+          echo "zip=rockbox-erosqnative-$short.zip" >> "$GITHUB_OUTPUT"
+          cp build/rockbox.zip "rockbox-erosqnative-$short.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.zip }}
+          path: ${{ steps.name.outputs.zip }}
+
+      - name: Publish the release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.name.outputs.tag }}
+          ZIP: ${{ steps.name.outputs.zip }}
+        run: |
+          prev=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
+          changes=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" \
+            ${prev:+-f previous_tag_name="$prev"} --jq .body)
+          cat > notes.md <<EOF
+          Rockbox for the Aigo Eros Q family with Bluetooth audio. Bluetooth
+          needs hardware revision 4: Eros Q V2.2, Hifiwalker H2 V1.9 to V2.3
+          or Surfans F20 V3.4.
+
+          To install, extract $ZIP to the root of the SD card and let it
+          replace the .rockbox folder. Your settings and pairings are kept.
+
+          $changes
+          EOF
+          gh release create "$TAG" "$ZIP" \
+            --target "$GITHUB_SHA" \
+            --title "Rockbox Bluetooth $(date -u +%Y-%m-%d) (${GITHUB_SHA::7})" \
+            --notes-file notes.md
