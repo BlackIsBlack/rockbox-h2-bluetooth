@@ -583,20 +583,21 @@ const char * bt_getname(int selected_item, void * data, char * buffer, size_t bu
     (void)data;
     bt_list_entry_t *entry = bt_entry_for_row(selected_item);
     if (!entry) /* row 0 */
-        return selected_item % 2 == 0 ? "Scan again" : (bt_discovering ? "Searching..." : "");
+        return selected_item % 2 == 0 ? "Scan again" :
+               (bt_discovering ? "Searching..." : "Find nearby devices");
     if (selected_item % 2 == 0)
         return entry->name;
 
     bool paired = entry->rssi == -128;
     if (bt_connected && memcmp(entry->addr, bt_target_addr, ESP_BD_ADDR_LEN) == 0) {
         if (bt_batt_pct >= 0)
-            snprintf(buffer, buffer_len, "Connected (%s)  Battery %d%%", bt_codec_name(), bt_batt_pct);
+            snprintf(buffer, buffer_len, "Connected, %s, %d%%", bt_codec_name(), bt_batt_pct);
         else
-            snprintf(buffer, buffer_len, "Connected (%s)", bt_codec_name());
+            snprintf(buffer, buffer_len, "Connected, %s", bt_codec_name());
     } else if (paired) {
         int batt = bt_saved_battery(entry->addr);
         if (batt >= 0)
-            snprintf(buffer, buffer_len, "Paired  Battery %d%% (last seen)", batt);
+            snprintf(buffer, buffer_len, "Paired, last seen %d%%", batt);
         else
             snprintf(buffer, buffer_len, "Paired");
     } else {
