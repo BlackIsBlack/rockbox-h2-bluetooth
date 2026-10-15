@@ -50,10 +50,14 @@ jobs:
           MAKEFLAGS="-j$(nproc)" \
           ./rockboxdev.sh --target=i
 
+      # Rockbox's makefile hands the whole source list to the shell as one
+      # argument. With the long checkout path it goes over Linux's 128 KiB
+      # limit per argument, so build through a short path instead.
       - name: Build erosqnative
         run: |
           export PATH="$HOME/rbdev/bin:$PATH"
-          mkdir build && cd build
+          sudo ln -s "$GITHUB_WORKSPACE" /rb
+          mkdir /rb/build && cd /rb/build
           ../tools/configure --target=erosqnative --type=n
           make -j"$(nproc)"
           make zip
