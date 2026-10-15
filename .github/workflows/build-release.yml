@@ -32,9 +32,11 @@ jobs:
 
       # Building gcc takes around 20 minutes, so keep it between runs. It
       # only gets rebuilt when the toolchain script or its patches change.
-      - name: Cache the toolchain
+      # Saved right after it's built, so a failing Rockbox build doesn't
+      # throw it away.
+      - name: Restore the toolchain
         id: toolchain
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/rbdev
           key: mipsel-elf-${{ hashFiles('tools/rockboxdev.sh', 'tools/toolchain-patches/**') }}
@@ -49,6 +51,13 @@ jobs:
           GNU_MIRROR=https://ftp.gnu.org/gnu \
           MAKEFLAGS="-j$(nproc)" \
           ./rockboxdev.sh --target=i
+
+      - name: Save the toolchain
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/rbdev
+          key: ${{ steps.toolchain.outputs.cache-primary-key }}
 
       # Rockbox's makefile hands the whole source list to the shell as one
       # argument. With the long checkout path it goes over Linux's 128 KiB
