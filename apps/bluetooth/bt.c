@@ -616,7 +616,7 @@ bool bt_scan(void)
     bt_idle_since = current_tick; /* don't auto-off while picking a device */
 
     bt_status_changed = false;
-    simplelist_info_init(&info, bt_status, (bt_entry_count() + 1) * 2, NULL);
+    simplelist_info_init(&info, bt_status, bt_entry_count() + 1, NULL); /* items, not lines */
     info.scroll_all = false;
     info.selection_size = 2;
     info.action_callback = bt_action_callback;
