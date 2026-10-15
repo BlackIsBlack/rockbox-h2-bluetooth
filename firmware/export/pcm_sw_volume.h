@@ -31,6 +31,7 @@
 #include <audiohw.h>
 #include <limits.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #define PCM_MUTE_LEVEL INT_MIN
 
@@ -41,6 +42,9 @@ void pcm_set_prescaler(int prescale);
 
 /* Set the per-channel volume cut/gain for all PCM playback */
 void pcm_set_master_volume(int vol_l, int vol_r);
+
+/* Apply the master volume in place to 16-bit stereo PCM */
+void pcm_scale_buffer_16(int16_t *buf, size_t size);
 
 void pcm_play_dma_start_int_swvol(const void *addr, size_t size);
 void pcm_play_dma_stop_int_swvol(void);

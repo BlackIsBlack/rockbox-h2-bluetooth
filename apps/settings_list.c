@@ -36,6 +36,9 @@
 #include "videoout.h"
 #endif
 #include "rbpaths.h"
+#ifdef HAVE_BLUETOOTH
+#include "bluetooth/bt.h"
+#endif
 #include "settings_list.h"
 #include "usb.h"
 #include "audio.h"
@@ -1639,6 +1642,26 @@ const struct settings_list settings[] = {
     INT_SETTING(F_TIME_SETTING, disk_spindown, LANG_SPINDOWN, 5, "disk spindown",
                     UNIT_SEC, 3, 254, 1, NULL, NULL, STORAGE_FUNCTION(spindown)),
 #endif /* HAVE_DISK_STORAGE */
+#ifdef HAVE_BLUETOOTH
+    /* a setting so it can go on the Quick Screen / in Shortcuts */
+    OFFON_SETTING(F_CB_ONLY_IF_CHANGED, bt_power, LANG_BLUETOOTH, false,
+                  "bluetooth", bt_power_setting_changed),
+    OFFON_SETTING(0, bt_on_startup, LANG_BLUETOOTH_ON_STARTUP, false,
+                  "bluetooth on startup", NULL),
+    OFFON_SETTING(0, bt_show_icon, LANG_BLUETOOTH_SHOW_ICON, true,
+                  "bluetooth show icon", NULL),
+    OFFON_SETTING(0, bt_debug_log, LANG_BLUETOOTH_DEBUG_LOG, false,
+                  "bluetooth debug log", NULL),
+    INT_SETTING(F_TIME_SETTING, bt_auto_off, LANG_BLUETOOTH_AUTO_OFF, 10,
+                "bluetooth auto off", UNIT_MIN, 0, 60, 5,
+                formatter_time_unit_0_is_off, getlang_time_unit_0_is_off, NULL),
+    CHOICE_SETTING(0, bt_codec, LANG_BLUETOOTH_CODEC, 0, "bluetooth codec",
+                   "auto,ldac,aptxhd,aptx,sbc", NULL, 5,
+                   ID2P(LANG_AUTO), "LDAC", "aptX HD", "aptX", "SBC"),
+    CHOICE_SETTING(0, bt_ldac_quality, LANG_BLUETOOTH_LDAC_QUALITY, 0,
+                   "bluetooth ldac quality", "adaptive,990,660,330", NULL, 4,
+                   ID2P(LANG_BLUETOOTH_ADAPTIVE), "990 kbps", "660 kbps", "330 kbps"),
+#endif
     /* browser */
     TEXT_SETTING(0, start_directory, "start directory", "/", NULL, NULL),
     SYSTEM_STATUS_TEXT_SETTING(0, browse_last_folder, "last folder", "/", NULL, NULL),

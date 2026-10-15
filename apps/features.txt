@@ -328,3 +328,7 @@ utf8proc
 #if defined(HAVE_COMPOSITE_VIDEO_OUT)
 videoout
 #endif
+
+#if defined(HAVE_BLUETOOTH)
+bluetooth
+#endif

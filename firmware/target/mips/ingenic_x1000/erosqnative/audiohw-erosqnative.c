@@ -21,6 +21,7 @@
 #include "system.h"
 #include "audiohw.h"
 #include "pcm_sink.h"
+#include "pcm-internal.h"
 #include "pcm_sw_volume.h"
 #include "pcm_sampr.h"
 #include "i2c-target.h"
@@ -177,6 +178,21 @@ void audiohw_set_volume(int vol_l, int vol_r)
 
     l = vol_l;
     r = vol_r;
+
+#ifdef HAVE_BLUETOOTH
+    /* Bluetooth sink: its own volume, or software volume; no line-out clamp */
+    struct pcm_sink *sink = pcm_get_current_sink();
+    if (sink != &builtin_pcm_sink)
+    {
+        l = l <= PCM5102A_VOLUME_MIN ? PCM_MUTE_LEVEL : l;
+        r = r <= PCM5102A_VOLUME_MIN ? PCM_MUTE_LEVEL : r;
+        if (sink->ops.set_volume)
+            sink->ops.set_volume(l, r);
+        else
+            pcm_set_master_volume(l, r);
+        return;
+    }
+#endif
 
 #if (defined(HAVE_HEADPHONE_DETECTION) && defined(HAVE_LINEOUT_DETECTION))
     /* Due to the hardware's detection method, make the Line-Out

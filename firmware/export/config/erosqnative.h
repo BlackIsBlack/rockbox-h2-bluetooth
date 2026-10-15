@@ -43,6 +43,10 @@
 #define PLUGIN_BUFFER_SIZE 0x200000 /* 2 MiB */
 #define CODEC_SIZE         0x100000 /* 1 MiB */
 
+/* Bluetooth */
+#define HAVE_BLUETOOTH
+#define BT_HEAP_SIZE       0xC0000 /* 768 KiB: ~1 s A2DP TX queue of 4 KiB buffers + HFP */
+
 /* LCD defines */
 #define CONFIG_LCD   LCD_EROSQ
 #define LCD_WIDTH  320

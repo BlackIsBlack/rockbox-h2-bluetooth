@@ -510,7 +510,11 @@ MAKE_MENU(main_menu_, ID2P(LANG_SETTINGS), NULL,
         Icon_Submenu_Entered,
         &sound_settings,
         &playback_settings,
-        &settings_menu_item, &theme_menu,
+        &settings_menu_item,
+#ifdef HAVE_BLUETOOTH
+        &bluetooth_settings_menu,
+#endif
+        &theme_menu,
 #ifdef HAVE_RECORDING
         &recording_settings,
 #endif

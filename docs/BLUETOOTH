@@ -1,0 +1,196 @@
+Bluetooth audio
+===============
+
+Rockbox can play to Bluetooth headphones and speakers on the Aigo Eros Q
+family. This file covers setting it up, using it, and adding Bluetooth
+status to a theme. The manual has the same settings in more detail
+(Settings > Bluetooth Settings).
+
+
+Which players
+-------------
+
+Only hardware revision 4, the ones that use the "erosq_2024" update file:
+
+  Aigo Eros Q    V2.2
+  Hifiwalker H2  V1.9 to V2.3
+  Surfans F20    V3.4
+
+The Bluetooth chip is a Cypress CYW43438 on UART0. Older revisions wire the
+chip differently and Bluetooth will refuse to start on them.
+
+
+Installing
+----------
+
+Bluetooth needs no extra files. Install the erosqnative build the usual way
+by extracting the zip to the root of the SD card. The chip firmware is built
+into rockbox.erosq.
+
+
+First connection
+----------------
+
+1. Put the headphones in pairing mode.
+2. Settings > Bluetooth Settings > Devices.
+3. Wait a few seconds for them to show up, select them and press Play.
+
+The list title says what is happening (connecting, paired, connected). In
+the list:
+
+  Play             connect to the selected device
+  Long press Menu  disconnect it
+  Menu             turn Bluetooth off
+  Back             leave the list, Bluetooth stays on
+
+"Scan again" at the top of the list searches again. Only audio devices are
+listed.
+
+After the first time, turning Bluetooth on reconnects the last headphones
+by itself, and most earbuds reconnect when you take them out of the case.
+
+
+What works
+----------
+
+- Play, pause, next and previous from the headphone buttons
+- In-ear detection: taking the earbuds out pauses, putting them back resumes
+- Playback pauses when the headphones disconnect or go out of range
+- Volume sync: if the headphones support it, the player's volume keys set
+  the headphones' volume and the headphones' buttons move Rockbox's volume
+- Headphone battery level, shown in the Devices list and in themes
+- Title, artist and album for car stereos and other displays
+- Codecs: SBC, aptX, aptX HD and LDAC. SBC is the one that has seen real
+  use; the others should work but have had little testing.
+
+Audio always goes out at 44.1 kHz and Rockbox resamples anything else.
+
+
+Settings
+--------
+
+Bluetooth            on/off. Can be put on the Quick Screen and in
+                     Shortcuts, which is the quickest way to get to it.
+Devices              the list above
+Enable on Startup    turn on at boot and reconnect (default off)
+Auto Off When Idle   turn off after this long without a connection
+                     (default 10 minutes, Off to never turn off)
+Preferred Codec      Auto, LDAC, aptX HD, aptX or SBC
+LDAC Quality         Adaptive, 990, 660 or 330 kbps
+Show Bluetooth Icon  status bar and theme icons
+Forget Devices       unpair a device
+Debug Logging        write bt_log.txt and bt_hci.pcap (default off)
+
+To change the name headphones see, put it on the first line of
+/.rockbox/playername.txt. Without that file the name is "Rockbox".
+
+Paired devices are stored in /.rockbox/bt_config.conf, including their
+link keys, so don't share that file.
+
+
+If something goes wrong
+-----------------------
+
+Turn on Debug Logging and do the thing that fails again. Rockbox then writes:
+
+  /.rockbox/bt_log.txt   what the stack and Rockbox did, with timestamps
+  /.rockbox/bt_hci.pcap  all traffic with the Bluetooth chip during
+                         connection setup and the first seconds of
+                         playback; open it with Wireshark
+
+"Bluetooth failed to start (controller ...)" means the chip didn't answer.
+"Could not connect" usually means the headphones are busy with another
+device, like a phone. Dropouts mean the radio link is struggling; a lower
+LDAC quality, or SBC, helps.
+
+
+Themes
+======
+
+Rockbox's own status bar shows a small Bluetooth icon by itself: dashed while
+Bluetooth is on, solid once headphones are connected. Themes with their own
+status bar (an .sbs file) need two tags to do the same.
+
+
+The tags
+--------
+
+%Bt  Bluetooth state, for conditionals:
+
+       %?Bt<off|on|connected|playing>
+
+     "on" means Bluetooth is on but nothing is connected. "playing" means
+     audio is going out over Bluetooth right now.
+
+%Bb  Headphone battery, 0 to 100. Behaves like %bl:
+
+       %?Bb<unknown|0-19|20-39|...|100>
+
+     The first option is used when nothing is connected or the headphones
+     haven't reported a level yet. The other options split 0 to 100
+     evenly and the last one is only used at exactly 100. Used outside a
+     conditional it prints the number, or nothing when unknown.
+
+Both read as off and unknown when Show Bluetooth Icon is turned off, so a
+theme doesn't have to check that setting.
+
+
+Adding them to a theme
+----------------------
+
+1. Draw the icons. Rockbox images are BMP files. The usual way to do states
+   is a strip of equal sized frames stacked on top of each other, like the
+   battery and repeat icons most themes already have. For the Bluetooth
+   icon three or four frames work well:
+
+     frame 1  on, nothing connected (a dotted or faded rune is common)
+     frame 2  connected
+     frame 3  playing (optional, can be the same as connected)
+
+   For the headphone battery, four frames from one bar to full is enough.
+   1-bit (black and white) BMPs are drawn in the theme's foreground colour,
+   so they follow colour changes for free. Keep them the same height as the
+   icons next to them.
+
+2. Load them near the top of the .sbs file, with the number of frames as
+   the last argument:
+
+     %xl(bt,bluetooth.bmp,0,0,3)
+     %xl(hpbatt,hp_battery.bmp,0,0,4)
+
+3. Give each one its own viewport and pick a frame with a conditional.
+   An empty first option hides the icon:
+
+     # Bluetooth
+     %V(95,8,20,20,-)
+     %?Bt<|%xd(bt,1)|%xd(bt,2)|%xd(bt,3)>
+
+     # Headphone battery
+     %V(118,8,10,20,-)
+     %?Bb<|%xd(hpbatt,1)|%xd(hpbatt,2)|%xd(hpbatt,3)|%xd(hpbatt,4)|%xd(hpbatt,4)>
+
+   With six options in %?Bb<...> that is: hidden, then 0-24, 25-49, 50-74,
+   75-99 and 100 percent. Repeating the last frame for 75-99 and 100 means
+   "full" shows from 75 percent up. Use more or fewer options to change the
+   steps.
+
+4. If the theme has its own Now Playing screen (.wps), add the same lines
+   there too. The .sbs is not shown on that screen.
+
+5. Check the files before copying them to the player. checkwps (build it
+   with tools/configure, type C) points at the line with any mistake:
+
+     checkwps.erosqnative .rockbox/wps/mytheme.sbs
+
+   The theme editor in utils/themeeditor can preview both tags; set
+   "Bluetooth State" and "Headphone Battery" in its device settings.
+
+Things to watch for:
+
+- Viewports that overlap clear each other. Put the icon where nothing else
+  draws, or put its viewport after the other one in the file.
+- Leave room for the longest text next to the icons, for example a 12 hour
+  clock ("12:34 PM") is a lot wider than "16:34".
+- Players without Bluetooth just read the tags as off, so the same theme
+  works there. Rockbox versions from before these tags existed will refuse
+  to load it though, so mention it if you share the theme.

@@ -108,6 +108,8 @@ int button_apply_acceleration(const unsigned int data);
 #define BUTTON_MULTIMEDIA_FFWD      (BUTTON_MULTIMEDIA|0x20)
 #define BUTTON_MULTIMEDIA_VOLUME_UP   (BUTTON_MULTIMEDIA|0x40)
 #define BUTTON_MULTIMEDIA_VOLUME_DOWN (BUTTON_MULTIMEDIA|0x80)
+#define BUTTON_MULTIMEDIA_PLAY      (BUTTON_MULTIMEDIA|0x100) /* resume if paused */
+#define BUTTON_MULTIMEDIA_PAUSE     (BUTTON_MULTIMEDIA|0x200) /* pause if playing */
 
 #define BUTTON_MULTIMEDIA_ALL       (BUTTON_MULTIMEDIA_PLAYPAUSE| \
                                      BUTTON_MULTIMEDIA_STOP| \
@@ -116,7 +118,9 @@ int button_apply_acceleration(const unsigned int data);
                                      BUTTON_MULTIMEDIA_REW | \
                                      BUTTON_MULTIMEDIA_FFWD| \
                                      BUTTON_MULTIMEDIA_VOLUME_UP| \
-                                     BUTTON_MULTIMEDIA_VOLUME_DOWN)
+                                     BUTTON_MULTIMEDIA_VOLUME_DOWN| \
+                                     BUTTON_MULTIMEDIA_PLAY| \
+                                     BUTTON_MULTIMEDIA_PAUSE)
 
 #ifdef HAVE_TOUCHSCREEN
 long touchscreen_last_touch(void);

@@ -1,0 +1,4 @@
+# This project does not need newer update?
+# Please update this list if you find better candidates.
+rtenneti@google.com
+include platform/system/core:/janitors/OWNERS #{LAST_RESORT_SUGGESTION}

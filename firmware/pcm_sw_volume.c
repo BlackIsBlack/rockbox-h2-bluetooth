@@ -398,3 +398,23 @@ void pcm_set_master_volume(int vol_l, int vol_r)
     vol_factor_r = pcm_centibels_to_factor(vol_r);
     pcm_sync_prescaler();
 }
+
+static inline int16_t pcm_scale_sample_16(uint32_t factor, int16_t s)
+{
+    int32_t v = ((int64_t)s * factor) >> PCM_SW_VOLUME_FRACBITS;
+    return v > INT16_MAX ? INT16_MAX : v < INT16_MIN ? INT16_MIN : v;
+}
+
+/* Apply the master volume in place to 16-bit stereo PCM. For sinks that
+ * consume the mixer's 16-bit output directly (Bluetooth encoders); the
+ * swvol double buffer is 32-bit on targets with WANT_SWVOL_32. */
+void pcm_scale_buffer_16(int16_t *buf, size_t size)
+{
+    uint32_t factor_l = pcm_new_factor_l, factor_r = pcm_new_factor_r;
+    if (factor_l == PCM_FACTOR_UNITY && factor_r == PCM_FACTOR_UNITY)
+        return;
+    for (; size >= PCM_SAMPLE_SIZE; size -= PCM_SAMPLE_SIZE, buf += 2) {
+        buf[0] = pcm_scale_sample_16(factor_l, buf[0]);
+        buf[1] = pcm_scale_sample_16(factor_r, buf[1]);
+    }
+}

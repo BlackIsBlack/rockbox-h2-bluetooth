@@ -801,6 +801,17 @@ long default_event_handler_ex(long event, void (*callback)(void *), void *parame
                 }
             return event;
         }
+        /* explicit play/pause, e.g. Bluetooth in-ear detection: never toggle */
+        case BUTTON_MULTIMEDIA_PLAY:
+            if ((audio_status() & (AUDIO_STATUS_PLAY|AUDIO_STATUS_PAUSE))
+                == (AUDIO_STATUS_PLAY|AUDIO_STATUS_PAUSE))
+                unpause_action(true);
+            return event;
+        case BUTTON_MULTIMEDIA_PAUSE:
+            if ((audio_status() & (AUDIO_STATUS_PLAY|AUDIO_STATUS_PAUSE))
+                == AUDIO_STATUS_PLAY)
+                pause_action(true);
+            return event;
         case BUTTON_MULTIMEDIA_NEXT:
             audio_next();
             return event;

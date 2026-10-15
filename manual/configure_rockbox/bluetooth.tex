@@ -1,0 +1,109 @@
+\section{\label{ref:BluetoothSettings}Bluetooth}
+
+Rockbox can send audio to Bluetooth headphones and speakers. This only works
+on hardware revision 4 players (Aigo Eros Q V2.2, Hifiwalker H2 V1.9 to V2.3,
+Surfans F20 V3.4). On other revisions Bluetooth will refuse to start.
+
+The \setting{Bluetooth Settings} menu is in the main \setting{Settings} menu.
+
+\subsection{Connecting headphones}
+Put your headphones in pairing mode, then open \setting{Devices}. Bluetooth is
+turned on if it isn't already, and the \dap{} looks for nearby audio devices
+for about six seconds. Headphones you have paired before are listed even when
+they are switched off.
+
+\begin{description}
+  \item[Play.] Connect to the selected device. The first connection also pairs
+    with it. The list title shows how far along the connection is.
+  \item[Long press Menu.] Disconnect the selected device.
+  \item[Menu.] Turn Bluetooth off and leave the list.
+  \item[Back.] Leave the list. Bluetooth stays on and stays connected.
+\end{description}
+
+The first row, \setting{Scan again}, starts a new search. Each device shows a
+second line: the signal strength for devices found in the search,
+``Paired'' for devices you have used before, or ``Connected'' with the codec
+in use. If your headphones report their battery level it is shown there too.
+
+Once paired, most headphones will reconnect on their own when you take them
+out of their case, as long as Bluetooth is on.
+
+\subsection{What your headphones can do}
+\begin{itemize}
+  \item Their play, pause, next and previous buttons control Rockbox.
+  \item Headphones that pause when you take them off (in-ear detection) will
+    pause and resume Rockbox.
+  \item Playback pauses when the headphones disconnect or go out of range.
+  \item If the headphones support it, the volume keys on the \dap{} change the
+    volume of the headphones themselves, and the headphones' own volume
+    buttons move the Rockbox volume. Otherwise Rockbox lowers the volume
+    digitally before sending the audio.
+  \item The headphones' battery level is read when they report it. Most
+    earbuds do.
+  \item Car stereos and other devices with a display get the title, artist,
+    album and playing position.
+\end{itemize}
+
+Audio is always sent at 44.1\,kHz. Music at other sample rates is resampled
+by Rockbox.
+
+\subsection{Settings}
+\begin{description}
+  \item[Bluetooth.] Turns Bluetooth on or off. Turning it on reconnects the
+    last headphones you used. This setting can be put on the Quick Screen or in
+    the Shortcuts menu.
+  \item[Devices.] Shows the device list described above.
+  \item[Enable on Startup.] Turns Bluetooth on when Rockbox starts and
+    reconnects the last headphones. This happens in the background, so it
+    doesn't slow down booting. Off by default.
+  \item[Auto Off When Idle.] Turns Bluetooth off after this many minutes
+    without a connected device, to save battery. Set to \setting{Off} if you
+    want headphones to be able to reconnect at any time. Default is 10 minutes.
+  \item[Preferred Codec.] The codec to use when the headphones support more
+    than one. \setting{Auto} picks the best one both sides support, in the
+    order LDAC, aptX HD, aptX, SBC. If your choice isn't supported by the
+    headphones, the next best is used. SBC is supported by all headphones and
+    is the most tested.
+  \item[LDAC Quality.] \setting{Adaptive} lowers the bitrate when the
+    connection gets weak. The fixed settings are 990, 660 and 330\,kbps.
+  \item[Show Bluetooth Icon.] Shows the Bluetooth status and headphone battery
+    in the status bar and in themes that support it.
+  \item[Forget Devices.] Lists paired devices. Select one and confirm to
+    remove it. Bluetooth is turned on if needed, since the list of paired
+    devices is kept by the Bluetooth stack.
+  \item[Debug Logging.] Writes \fname{/.rockbox/bt\_log.txt} and
+    \fname{/.rockbox/bt\_hci.pcap}. Leave it off unless you are tracking down
+    a problem, as it writes to the disk often.
+\end{description}
+
+\subsection{Device name}
+Headphones see the \dap{} as ``Rockbox''. To use another name, put it on the
+first line of \fname{/.rockbox/playername.txt}.
+
+\subsection{Files}
+\begin{description}
+  \item[\fname{/.rockbox/bt\_config.conf}] Paired devices and their keys.
+    Don't share this file.
+  \item[\fname{/.rockbox/bt\_last.dat}] The last connected device, used for
+    reconnecting.
+  \item[\fname{/.rockbox/bt\_log.txt}] Event log, only with
+    \setting{Debug Logging}.
+  \item[\fname{/.rockbox/bt\_hci.pcap}] Capture of the traffic between Rockbox
+    and the Bluetooth chip during connection setup and the first seconds of
+    playback, only with \setting{Debug Logging}. It can be opened with
+    Wireshark.
+\end{description}
+
+\subsection{Troubleshooting}
+\begin{description}
+  \item[``Bluetooth failed to start''.] The message names the step that
+    failed. ``controller'' means the Bluetooth chip did not answer. Try again
+    after a restart.
+  \item[Headphones are not in the list.] Make sure they are in pairing mode,
+    then use \setting{Scan again}. Only audio devices are listed.
+  \item[``Could not connect''.] The headphones may be connected to another
+    device, such as a phone. Disconnect them there first.
+  \item[Audio drops out.] Bluetooth needs a clear path between the \dap{} and
+    the headphones. Keeping the \dap{} in a pocket on the same side as the
+    headphones helps. With LDAC, try \setting{Adaptive} or a lower quality.
+\end{description}

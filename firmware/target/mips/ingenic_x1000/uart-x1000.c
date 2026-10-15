@@ -195,14 +195,24 @@ void uart_tx(uart_port_t port, const uint8_t *buf, size_t len) {
     }
 }
 
-size_t uart_rx(uart_port_t port, uint8_t *buf, size_t len) {
+size_t uart_rx_timeout(uart_port_t port, uint8_t *buf, size_t len, int timeout) {
     rx_buf = buf;
     rx_available = len;
     jz_writef(UART_UIER(port), RTOIE(1), RDRIE(1));
-    semaphore_wait(&rx_done_sem, TIMEOUT_BLOCK);
+    if (semaphore_wait(&rx_done_sem, timeout) == OBJ_WAIT_TIMEDOUT) {
+        int irq = disable_irq_save();
+        jz_writef(UART_UIER(port), RDRIE(0), RLSIE(0), RTOIE(0));
+        restore_irq(irq);
+        /* the IRQ may have finished just before we masked it */
+        semaphore_wait(&rx_done_sem, TIMEOUT_NOBLOCK);
+    }
     size_t rem = rx_available;
     rx_available = 0;
     return len - rem;
+}
+
+size_t uart_rx(uart_port_t port, uint8_t *buf, size_t len) {
+    return uart_rx_timeout(port, buf, len, TIMEOUT_BLOCK);
 }
 
 bool uart_pending_rx(uart_port_t port) {

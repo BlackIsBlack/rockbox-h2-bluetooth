@@ -43,6 +43,9 @@ struct pcm_sink_ops {
     void (*unlock)(void);
     void (*play)(const void* addr, size_t size);
     void (*stop)(void);
+    /* optional: volume handled by the sink (centibels), e.g. Bluetooth
+     * absolute volume. NULL = software volume. */
+    void (*set_volume)(int vol_l, int vol_r);
 };
 
 struct pcm_sink {
@@ -59,6 +62,9 @@ struct pcm_sink {
 
 enum pcm_sink_ids {
     PCM_SINK_BUILTIN = 0,
+#ifdef HAVE_BLUETOOTH
+    PCM_SINK_BLUETOOTH,
+#endif
 #ifdef USB_ENABLE_IAP
     PCM_SINK_IAP,
 #endif

@@ -475,7 +475,14 @@ static void init(void)
 
 #else /* ! (CONFIG_PLATFORM & PLATFORM_HOSTED) */
 
+#include "buflib.h"
 #include "errno.h"
+#include "tlsf.h"
+#ifdef HAVE_BLUETOOTH
+#include "bluetooth/bt.h"
+#endif
+
+extern unsigned char btbuf[];
 
 static void init(void) INIT_ATTR;
 static void init(void)
@@ -486,6 +493,11 @@ static void init(void)
     system_init();
     core_allocator_init();
     kernel_init();
+
+#ifdef HAVE_BLUETOOTH
+    memset(btbuf, 0, 4); // make sure tlsf doesn't see ghosts
+    init_memory_pool(BT_HEAP_SIZE, btbuf);
+#endif
 
 #if defined(HAVE_BOOTDATA) && !defined(BOOTLOADER)
     verify_boot_data();
@@ -805,6 +817,9 @@ static void init(void)
     CHART("<settings_apply_skins");
     settings_apply_skins();
     CHART(">settings_apply_skins");
+#ifdef HAVE_BLUETOOTH
+    bt_init(); /* "Enable on Startup" runs in its own thread */
+#endif
 }
 
 #ifdef CPU_PP
