@@ -94,6 +94,9 @@ typedef struct {
   esp_a2d_conn_hdl_t peer;
   uint32_t timestamp; /* Timestamp for the A2DP frames */
   SBC_ENC_PARAMS sbc_encoder_params;
+  int16_t max_bitpool;        /* what we settled on with the headphones */
+  long bitpool_changed;       /* tick of the last adaptive change */
+  bool send_failed;           /* TX queue was full last time */
   tA2DP_SBC_FEEDING_STATE feeding_state;
   int16_t pcmBuffer[SBC_MAX_PCM_BUFFER_SIZE];
 
@@ -306,6 +309,42 @@ static void a2dp_sbc_encoder_update(int16_t freq, esp_a2d_mcc_t *pref_mcc, bool*
   /* Reset the SBC encoder */
   SBC_Encoder_Init(&a2dp_sbc_encoder_cb.sbc_encoder_params);
   a2dp_sbc_encoder_cb.tx_sbc_frames = calculate_max_frames_per_packet();
+  a2dp_sbc_encoder_cb.max_bitpool = p_encoder_params->s16BitPool;
+  a2dp_sbc_encoder_cb.bitpool_changed = current_tick;
+}
+
+/* Adaptive bitpool. When the radio link can't keep up (player in a pocket,
+ * on the other side of your body...) the TX queue backs up and audio gets
+ * dropped. Send less while that lasts and creep back up once it's clear.
+ * Every SBC frame carries its own bitpool, so the headphones just follow. */
+#define SBC_BITPOOL_FLOOR   20     /* ~140 kbps at 44.1 kHz joint stereo */
+#define SBC_QUEUE_BACKLOG   27     /* packets, about half a second */
+#define SBC_QUEUE_CLEAR     5
+
+size_t btc_a2dp_source_tx_queue_len(void); /* btc_a2dp_source_ext_codec.c */
+void bt_log(const char *fmt, ...);
+
+static void a2dp_sbc_adapt_bitpool(void) {
+  SBC_ENC_PARAMS* p = &a2dp_sbc_encoder_cb.sbc_encoder_params;
+  int bp = p->s16BitPool;
+  size_t queued = btc_a2dp_source_tx_queue_len();
+  long since = current_tick - a2dp_sbc_encoder_cb.bitpool_changed;
+
+  if (a2dp_sbc_encoder_cb.send_failed || queued > SBC_QUEUE_BACKLOG) {
+    if (since > HZ / 2 && bp > SBC_BITPOOL_FLOOR)
+      bp = MAX(SBC_BITPOOL_FLOOR, bp - 6);
+  } else if (queued < SBC_QUEUE_CLEAR && since > HZ * 5 &&
+             bp < a2dp_sbc_encoder_cb.max_bitpool) {
+    bp = MIN(a2dp_sbc_encoder_cb.max_bitpool, bp + 2);
+  }
+  a2dp_sbc_encoder_cb.send_failed = false;
+
+  if (bp != p->s16BitPool) {
+    bt_log("sbc bitpool %d -> %d (queue %d)", p->s16BitPool, bp, (int)queued);
+    p->s16BitPool = bp;
+    a2dp_sbc_encoder_cb.tx_sbc_frames = calculate_max_frames_per_packet();
+    a2dp_sbc_encoder_cb.bitpool_changed = current_tick;
+  }
 }
 
 void a2dp_sbc_encoder_cleanup(void) {
@@ -349,6 +388,7 @@ void a2dp_sbc_send_frames(void) {
   uint8_t nb_frame = 0;
   uint8_t nb_iterations = 0;
 
+  a2dp_sbc_adapt_bitpool();
   a2dp_sbc_get_num_frame_iteration(&nb_iterations, &nb_frame, timestamp_us);
   if (nb_frame == 0) {
     return;
@@ -504,6 +544,7 @@ static void a2dp_sbc_encode_frames(uint8_t nb_frame) {
       remain_nb_frame = nb_frame;
       if (esp_a2d_source_audio_data_send(a2dp_sbc_encoder_cb.peer, p_buf) != ESP_OK) {
         esp_a2d_audio_buff_free(p_buf);
+        a2dp_sbc_encoder_cb.send_failed = true; /* see a2dp_sbc_adapt_bitpool */
         return;
       }
     } else {
@@ -704,7 +745,8 @@ static void sbc_set_freq(uint32_t freq, esp_a2d_mcc_t *pref_mcc) {
 }
 
 static void sbc_debug_info(char * buffer, size_t buffer_len) {
-  snprintf(buffer, buffer_len, "bitpool %d sampr %d", a2dp_sbc_encoder_cb.sbc_encoder_params.s16BitPool, a2dp_sbc_encoder_cb.sbc_encoder_params.s16SamplingFreq);
+  snprintf(buffer, buffer_len, "bitpool %d/%d sampr %d", a2dp_sbc_encoder_cb.sbc_encoder_params.s16BitPool,
+           a2dp_sbc_encoder_cb.max_bitpool, a2dp_sbc_encoder_cb.sbc_encoder_params.s16SamplingFreq);
 }
 
 struct a2dp_codec a2dp_codec_sbc = {

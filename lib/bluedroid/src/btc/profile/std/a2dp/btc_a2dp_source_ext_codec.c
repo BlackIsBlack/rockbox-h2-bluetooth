@@ -99,6 +99,14 @@ BOOLEAN btc_a2dp_source_enqueue_audio_frame(BT_HDR *p_buf)
     return TRUE;
 }
 
+/* Rockbox: lets the SBC encoder lower its bitrate when the link backs up */
+size_t btc_a2dp_source_tx_queue_len(void)
+{
+    if (btc_a2dp_source_state != BTC_A2DP_SOURCE_STATE_ON)
+        return 0;
+    return fixed_queue_length(a2dp_source_local_param.audio_tx_q);
+}
+
 void btc_source_report_delay_value(UINT16 delay_value)
 {
     esp_a2d_cb_param_t param;
