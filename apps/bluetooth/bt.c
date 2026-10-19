@@ -54,10 +54,13 @@
 /* Event log in /.rockbox/bt_log.txt. Bluedroid's errors/warnings land here
  * too (esp_log.h). Capped so a warning storm can't fill the card. */
 #define BT_LOG_MAX (512 * 1024)
+#define BT_LOG_FILE ROCKBOX_DIR "/bt_log.txt"
 static struct mutex bt_log_mutex;
-static int bt_log_fd = -2; /* -2: not opened yet, -1: failed or full */
-static long bt_log_size;
+static bool bt_log_started; /* first line since boot */
 
+/* Opens, appends and closes for every line. Slow, but this is a debug
+ * option, and a file kept open goes stale when the disk is handed to a PC
+ * over USB, which silently ended logging until the next reboot. */
 void bt_log(const char *fmt, ...)
 {
     if (!global_settings.bt_debug_log)
@@ -65,18 +68,6 @@ void bt_log(const char *fmt, ...)
     /* static: Bluedroid threads that log only have ~3 KiB of stack */
     static char buf[256];
     mutex_lock(&bt_log_mutex);
-    if (bt_log_fd == -2) {
-        bt_log_fd = open(ROCKBOX_DIR "/bt_log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
-        bt_log_size = bt_log_fd >= 0 ? ffilesize(bt_log_fd) : 0;
-        if (bt_log_size > BT_LOG_MAX / 2) { /* start fresh, keep it readable */
-            ftruncate(bt_log_fd, 0);
-            bt_log_size = 0;
-        }
-    }
-    if (bt_log_fd < 0) {
-        mutex_unlock(&bt_log_mutex);
-        return;
-    }
     int n = snprintf(buf, sizeof(buf), "%ld.%02ld ",
                      current_tick / HZ, current_tick % HZ);
     va_list ap;
@@ -88,10 +79,17 @@ void bt_log(const char *fmt, ...)
     if (n > 0 && buf[n - 1] != '\n')
         buf[n++] = '\n';
 
-    if (bt_log_size + n <= BT_LOG_MAX) {
-        write(bt_log_fd, buf, n);
-        fsync(bt_log_fd); /* survive a panic */
-        bt_log_size += n;
+    int fd = open(BT_LOG_FILE, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (fd >= 0) {
+        long size = ffilesize(fd);
+        if (!bt_log_started && size > BT_LOG_MAX / 2) {
+            ftruncate(fd, 0); /* start fresh, keep it readable */
+            size = 0;
+        }
+        bt_log_started = true;
+        if (size + n <= BT_LOG_MAX)
+            write(fd, buf, n);
+        close(fd);
     }
     mutex_unlock(&bt_log_mutex);
 }
