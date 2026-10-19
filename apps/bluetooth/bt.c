@@ -135,6 +135,11 @@ static char bt_target_name[BT_MAX_NAME_LEN];
 static bool bt_connected;
 static int bt_batt_pct = -1; /* connected headphones' battery, -1 = unknown */
 static int bt_connect_tries;   /* connect attempts left to make, see DISCONNECTED */
+/* bt_target_addr is who we're connecting to, this is who we're connected
+ * to (valid while bt_connected). They differ while switching devices. */
+static esp_bd_addr_t bt_conn_addr;
+static bool bt_switching;            /* connect to bt_target_addr once the old one is gone */
+static bool bt_resume_after_switch;  /* it was playing when the switch started */
 
 /* Pairing that needs the user (car stereos and the like). The GAP callback
  * fills this in, the device list (UI thread) asks and answers. */
@@ -440,6 +445,8 @@ void bt_disable(void)
     }
     global_settings.bt_power = false;
     bt_connected = false;
+    bt_switching = false;
+    bt_resume_after_switch = false;
     bt_batt_pct = -1;
     bt_abs_vol = false;
     bt_abs_vol_sent = -1;
@@ -503,6 +510,12 @@ void bt_init(void)
 }
 
 static volatile bool bt_discovering;
+
+static void bt_disconnect_device(esp_bd_addr_t addr)
+{
+    esp_hf_ag_slc_disconnect(addr); /* battery link, else the ACL stays up */
+    esp_a2d_source_disconnect(addr);
+}
 
 static void bt_pair_request(int type, const esp_bd_addr_t bda, uint32_t code)
 {
@@ -609,6 +622,10 @@ int bt_action_callback(int action, struct gui_synclist *lists)
                 return ACTION_REDRAW;
             }
             esp_err_t ret;
+            if (bt_connected && memcmp(entry->addr, bt_conn_addr, ESP_BD_ADDR_LEN) == 0) {
+                bt_set_status(true, "Already connected to %s", entry->name);
+                return ACTION_NONE;
+            }
             /* paging while an inquiry runs is unreliable; ESP-IDF's own
              * A2DP source example stops discovery first too */
             esp_bt_gap_cancel_discovery();
@@ -616,6 +633,16 @@ int bt_action_callback(int action, struct gui_synclist *lists)
             strlcpy(bt_target_name, entry->name, sizeof(bt_target_name));
             bt_log("connect " ESP_BD_ADDR_STR " '%s'", ESP_BD_ADDR_HEX(entry->addr), entry->name);
             bt_connect_tries = 1;
+            if (bt_connected) {
+                /* We can only stream to one device. Hang up the current
+                 * one, the new one gets connected on DISCONNECTED. */
+                int st = audio_status();
+                bt_resume_after_switch = (st & AUDIO_STATUS_PLAY) && !(st & AUDIO_STATUS_PAUSE);
+                bt_switching = true;
+                bt_disconnect_device(bt_conn_addr);
+                bt_set_status(false, "Switching to %s...", entry->name);
+                return ACTION_NONE;
+            }
             if ((ret = esp_a2d_source_connect(entry->addr)) != ESP_OK) {
                 bt_set_status(true, "Connect failed to start (%d)", ret);
                 return ACTION_NONE;
@@ -627,11 +654,12 @@ int bt_action_callback(int action, struct gui_synclist *lists)
             bt_list_entry_t *entry = bt_entry_for_row(lists->selected_item);
             if (!entry)
                 return ACTION_NONE;
-            esp_err_t ret;
-            if ((ret = esp_a2d_source_disconnect(entry->addr)) != ESP_OK) {
-                bt_set_status(true, "Disconnect failed (%d)", ret);
+            if (!bt_connected || memcmp(entry->addr, bt_conn_addr, ESP_BD_ADDR_LEN) != 0) {
+                bt_set_status(true, "%s isn't connected", entry->name);
                 return ACTION_NONE;
             }
+            bt_switching = false;
+            bt_disconnect_device(entry->addr);
             bt_set_status(false, "Disconnecting...");
             return ACTION_NONE;
         }
@@ -654,7 +682,7 @@ const char * bt_getname(int selected_item, void * data, char * buffer, size_t bu
         return entry->name;
 
     bool paired = entry->rssi == -128;
-    if (bt_connected && memcmp(entry->addr, bt_target_addr, ESP_BD_ADDR_LEN) == 0) {
+    if (bt_connected && memcmp(entry->addr, bt_conn_addr, ESP_BD_ADDR_LEN) == 0) {
         if (bt_batt_pct >= 0)
             snprintf(buffer, buffer_len, "Connected, %s, %d%%", bt_codec_name(), bt_batt_pct);
         else
@@ -825,8 +853,8 @@ static int bt_forget_action(int action, struct gui_synclist *lists)
     bt_list_entry_t *e = &bt_entries[gui_synclist_get_sel_pos(lists)];
     if (!yesno_pop(str(LANG_BLUETOOTH_FORGET_CONFIRM)))
         return ACTION_REDRAW;
-    if (bt_connected && memcmp(e->addr, bt_target_addr, ESP_BD_ADDR_LEN) == 0)
-        esp_a2d_source_disconnect(e->addr);
+    if (bt_connected && memcmp(e->addr, bt_conn_addr, ESP_BD_ADDR_LEN) == 0)
+        bt_disconnect_device(e->addr);
     bt_log("forget " ESP_BD_ADDR_STR " '%s'", ESP_BD_ADDR_HEX(e->addr), e->name);
     esp_bt_gap_remove_bond_device(e->addr);
     /* drop it from the list */
@@ -1091,6 +1119,7 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                     && !bt_lookup_name(param->conn_stat.remote_bda, bt_target_name, sizeof(bt_target_name)))
                     bt_target_name[0] = 0;
                 memcpy(bt_target_addr, param->conn_stat.remote_bda, ESP_BD_ADDR_LEN);
+                memcpy(bt_conn_addr, param->conn_stat.remote_bda, ESP_BD_ADDR_LEN);
                 bt_save_last(bt_target_addr);
                 bt_connected = true;
                 bt_connect_tries = 0;
@@ -1105,7 +1134,11 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                 esp_bt_gap_read_remote_name(param->conn_stat.remote_bda);
             } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
                 bt_open_cfg_valid = false;
-                if (bt_connected) {
+                if (bt_connected && bt_switching) {
+                    bt_switching = false;
+                    bt_set_status(false, "Connecting to %s...", bt_target_name);
+                    esp_a2d_source_connect(bt_target_addr);
+                } else if (bt_connected) {
                     bt_set_status(true, param->conn_stat.disc_rsn == ESP_A2D_DISC_RSN_NORMAL ? "Disconnected" : "Connection lost");
                 } else if (bt_connect_tries > 0 && bt_connect_tries < 3) {
                     /* Headphones busy with another device (a phone) only
@@ -1116,6 +1149,7 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                     esp_a2d_source_connect(bt_target_addr);
                 } else {
                     bt_connect_tries = 0;
+                    bt_resume_after_switch = false;
                     bt_set_status(true, global_settings.bt_debug_log ?
                                   "Could not connect (see bt_log.txt)" : "Could not connect");
                 }
@@ -1139,6 +1173,10 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
             if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY) {
                 pcm_switch_sink(PCM_SINK_BLUETOOTH);
                 setvol(); /* BT uses software volume */
+                if (bt_resume_after_switch) { /* switched devices mid song */
+                    bt_resume_after_switch = false;
+                    button_queue_post(BUTTON_MULTIMEDIA_PLAY, 0);
+                }
             } else if (sampr_switch_ongoing && param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_SUSPEND) {
                 esp_a2d_source_set_pref_mcc(conn_hdl, &new_pref_mcc);
             }
