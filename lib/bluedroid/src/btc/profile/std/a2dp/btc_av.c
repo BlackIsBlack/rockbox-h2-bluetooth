@@ -551,6 +551,10 @@ static BOOLEAN btc_av_state_opening_handler(btc_sm_event_t event, void *p_data)
         btc_report_connection_state(conn_stat, &(btc_av_cb.peer_bda), mtu, 0);
         /* change state to open/idle based on the status */
         btc_sm_change_state(btc_av_cb.sm_handle, av_state);
+        /* Rockbox: free the connect queue here, the codec caps report
+         * below breaks out early and used to skip this, which made every
+         * later connect request get dropped as a duplicate. */
+        btc_queue_advance();
 
         if (p_bta_data->open.status == BTA_AV_SUCCESS && !btc_a2d_deinit_if_ongoing()) {
             if (btc_av_cb.peer_sep == AVDT_TSEP_SRC) {
@@ -577,8 +581,6 @@ static BOOLEAN btc_av_state_opening_handler(btc_sm_event_t event, void *p_data)
                 }
             }
         }
-        btc_queue_advance();
-
     } break;
 
     case BTC_AV_CONFIG_EVT: {

@@ -1509,7 +1509,9 @@ typedef UINT8 tHCI_STATUS;
 #define HCI_DEF_CONN_ACCEPT_TOUT        0x1F40  /* 5 sec */
 
 /* Page timeout is used in LC only and LC is counting down slots not using OS */
-#define HCI_DEFAULT_PAGE_TOUT           0x2000  /* 5.12 sec (in slots) */
+/* Rockbox: 10.24 s. Headphones busy with a phone only page scan now and
+ * then, 5.12 s often wasn't enough to reach them. */
+#define HCI_DEFAULT_PAGE_TOUT           0x4000  /* 10.24 sec (in slots) */
 #define HCI_MIN_PAGE_TOUT               0x0016  /* 13.75 ms (in slots) */
 
 /* Scan enable flags */

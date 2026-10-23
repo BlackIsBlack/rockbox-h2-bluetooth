@@ -46,6 +46,18 @@ the list:
 "Scan again" at the top of the list searches again. Only audio devices are
 listed.
 
+Cars and some speakers ask for a code when pairing:
+
+  Both show a number   the player asks if it matches, press Play for yes
+  Car asks you to type the player shows the number to type
+  Old style PIN        type it in, it's often 0000 or 1234
+
+If pairing fails, just try again. The player throws away the half finished
+pairing so the next attempt starts clean.
+
+Headphones that are busy with a phone can be slow to answer. The player
+tries three times, which is usually enough to take them over.
+
 After the first time, turning Bluetooth on reconnects the last headphones
 by itself, and most earbuds reconnect when you take them out of the case.
 

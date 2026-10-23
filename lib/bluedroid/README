@@ -25,6 +25,8 @@ src/btc/profile/std/a2dp/btc_a2dp_source.c: changed time_now_us to use Rockbox t
 src/btc/profile/std/a2dp/bta_av_co.c: removed esp_attr.h include
 src/btc/profile/std/hf_ag/btc_hf_ag.c: BTC_HF_FEATURES limited to UNAT | HF_IND | EXTERR (battery only)
 osi/include/sdkconfig.h: CONFIG_BT_HFP_AG_ENABLE for headphone battery
+include/stack/hcidefs.h: HCI_DEFAULT_PAGE_TOUT 0x2000 -> 0x4000
+src/btc/profile/std/a2dp/btc_av.c: btc_queue_advance() on every OPEN_EVT, the sink caps path skipped it and later connects were dropped
 src/btc/profile/std/a2dp/btc_a2dp_source_ext_codec.c: MAX_OUTPUT_A2DP_SRC_FRAME_QUEUE_SZ 27 -> 54, added btc_a2dp_source_tx_queue_len()
 include/btc_hf_ag.h: include osi/include/rb_time.h (timespec/clock_gettime shim)
 src/btc/profile/std/avrc/btc_avrc.c: TG allows/sends PLAY_STATUS_CHANGE and TRACK_CHANGE notifications, answers GetPlayStatus and GetElementAttributes from rb_avrc_get_track_info() (include/rb_avrc.h)

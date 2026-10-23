@@ -47,16 +47,20 @@
 #include "lang.h"
 #include "settings.h"
 #include "yesno.h"
+#include "keyboard.h"
 #include "pcm_sw_volume.h"
 #include "strlcpy.h"
 
 /* Event log in /.rockbox/bt_log.txt. Bluedroid's errors/warnings land here
  * too (esp_log.h). Capped so a warning storm can't fill the card. */
 #define BT_LOG_MAX (512 * 1024)
+#define BT_LOG_FILE ROCKBOX_DIR "/bt_log.txt"
 static struct mutex bt_log_mutex;
-static int bt_log_fd = -2; /* -2: not opened yet, -1: failed or full */
-static long bt_log_size;
+static bool bt_log_started; /* first line since boot */
 
+/* Opens, appends and closes for every line. Slow, but this is a debug
+ * option, and a file kept open goes stale when the disk is handed to a PC
+ * over USB, which silently ended logging until the next reboot. */
 void bt_log(const char *fmt, ...)
 {
     if (!global_settings.bt_debug_log)
@@ -64,18 +68,6 @@ void bt_log(const char *fmt, ...)
     /* static: Bluedroid threads that log only have ~3 KiB of stack */
     static char buf[256];
     mutex_lock(&bt_log_mutex);
-    if (bt_log_fd == -2) {
-        bt_log_fd = open(ROCKBOX_DIR "/bt_log.txt", O_WRONLY | O_CREAT | O_APPEND, 0666);
-        bt_log_size = bt_log_fd >= 0 ? ffilesize(bt_log_fd) : 0;
-        if (bt_log_size > BT_LOG_MAX / 2) { /* start fresh, keep it readable */
-            ftruncate(bt_log_fd, 0);
-            bt_log_size = 0;
-        }
-    }
-    if (bt_log_fd < 0) {
-        mutex_unlock(&bt_log_mutex);
-        return;
-    }
     int n = snprintf(buf, sizeof(buf), "%ld.%02ld ",
                      current_tick / HZ, current_tick % HZ);
     va_list ap;
@@ -87,10 +79,17 @@ void bt_log(const char *fmt, ...)
     if (n > 0 && buf[n - 1] != '\n')
         buf[n++] = '\n';
 
-    if (bt_log_size + n <= BT_LOG_MAX) {
-        write(bt_log_fd, buf, n);
-        fsync(bt_log_fd); /* survive a panic */
-        bt_log_size += n;
+    int fd = open(BT_LOG_FILE, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (fd >= 0) {
+        long size = ffilesize(fd);
+        if (!bt_log_started && size > BT_LOG_MAX / 2) {
+            ftruncate(fd, 0); /* start fresh, keep it readable */
+            size = 0;
+        }
+        bt_log_started = true;
+        if (size + n <= BT_LOG_MAX)
+            write(fd, buf, n);
+        close(fd);
     }
     mutex_unlock(&bt_log_mutex);
 }
@@ -135,6 +134,23 @@ static esp_bd_addr_t bt_target_addr;   /* device we last tried to connect */
 static char bt_target_name[BT_MAX_NAME_LEN];
 static bool bt_connected;
 static int bt_batt_pct = -1; /* connected headphones' battery, -1 = unknown */
+static int bt_connect_tries;   /* connect attempts left to make, see DISCONNECTED */
+/* bt_target_addr is who we're connecting to, this is who we're connected
+ * to (valid while bt_connected). They differ while switching devices. */
+static esp_bd_addr_t bt_conn_addr;
+static bool bt_switching;            /* connect to bt_target_addr once the old one is gone */
+static bool bt_resume_after_switch;  /* it was playing when the switch started */
+
+/* Pairing that needs the user (car stereos and the like). The GAP callback
+ * fills this in, the device list (UI thread) asks and answers. */
+enum { BT_PAIR_NONE, BT_PAIR_CONFIRM, BT_PAIR_SHOW_CODE, BT_PAIR_PIN };
+static volatile int bt_pair_req;
+static esp_bd_addr_t bt_pair_bda;
+static uint32_t bt_pair_code;
+
+/* the config the stack opened the stream with (ESP_A2D_AUDIO_CFG_EVT) */
+static esp_a2d_mcc_t bt_open_cfg;
+static bool bt_open_cfg_valid;
 static volatile long bt_idle_since; /* for Auto Off When Idle */
 static volatile bool bt_abs_vol;     /* headphones control the volume */
 static volatile int bt_abs_vol_sent = -1; /* last 0..127 value exchanged */
@@ -215,6 +231,7 @@ static void bt_connect_last(void)
         return;
     memcpy(bt_target_addr, addr, ESP_BD_ADDR_LEN);
     bt_log("reconnect " ESP_BD_ADDR_STR " '%s'", ESP_BD_ADDR_HEX(addr), bt_target_name);
+    bt_connect_tries = 1;
     if (esp_a2d_source_connect(addr) == ESP_OK)
         bt_set_status(false, "Connecting to %s...", bt_target_name);
 }
@@ -428,6 +445,8 @@ void bt_disable(void)
     }
     global_settings.bt_power = false;
     bt_connected = false;
+    bt_switching = false;
+    bt_resume_after_switch = false;
     bt_batt_pct = -1;
     bt_abs_vol = false;
     bt_abs_vol_sent = -1;
@@ -492,6 +511,60 @@ void bt_init(void)
 
 static volatile bool bt_discovering;
 
+static void bt_disconnect_device(esp_bd_addr_t addr)
+{
+    esp_hf_ag_slc_disconnect(addr); /* battery link, else the ACL stays up */
+    esp_a2d_source_disconnect(addr);
+}
+
+static void bt_pair_request(int type, const esp_bd_addr_t bda, uint32_t code)
+{
+    memcpy(bt_pair_bda, bda, ESP_BD_ADDR_LEN);
+    bt_pair_code = code;
+    bt_pair_req = type;
+    button_queue_post(BUTTON_REDRAW, 0); /* wake the device list */
+}
+
+/* UI thread: answer a pairing request from the device list */
+static void bt_handle_pairing(void)
+{
+    char msg[96];
+    esp_bd_addr_t bda;
+    int req = bt_pair_req;
+    unsigned long code = bt_pair_code;
+    const char *name = bt_target_name[0] ? bt_target_name : "the other device";
+
+    memcpy(bda, bt_pair_bda, ESP_BD_ADDR_LEN);
+    switch (req) {
+        case BT_PAIR_CONFIRM:
+            bt_pair_req = BT_PAIR_NONE;
+            snprintf(msg, sizeof(msg), "Does %s show %06lu?", name, code);
+            esp_bt_gap_ssp_confirm_reply(bda, yesno_pop(msg));
+            break;
+        case BT_PAIR_SHOW_CODE: {
+            /* stays up until pairing finishes (or gives up after 30 s) */
+            long until = current_tick + 30 * HZ;
+            snprintf(msg, sizeof(msg), "Type %06lu on %s", code, name);
+            while (bt_pair_req == BT_PAIR_SHOW_CODE && TIME_BEFORE(current_tick, until))
+                splash(HZ / 2, msg);
+            if (bt_pair_req == BT_PAIR_SHOW_CODE)
+                bt_pair_req = BT_PAIR_NONE;
+            break;
+        }
+        case BT_PAIR_PIN: {
+            char pin[17] = "0000";
+            esp_bt_pin_code_t pin_code = {0};
+            bt_pair_req = BT_PAIR_NONE;
+            splashf(HZ * 2, "Enter the PIN for %s", name);
+            bool ok = kbd_input(pin, sizeof(pin), NULL) == 0 && pin[0] != 0;
+            size_t len = ok ? strlen(pin) : 0;
+            memcpy(pin_code, pin, len);
+            esp_bt_gap_pin_reply(bda, ok, len, pin_code);
+            break;
+        }
+    }
+}
+
 /* Devices list: row 0 is "Scan again", then one row per device */
 static int bt_entry_count(void)
 {
@@ -520,6 +593,10 @@ static int bt_saved_battery(const esp_bd_addr_t addr)
 
 int bt_action_callback(int action, struct gui_synclist *lists)
 {
+    if (bt_pair_req != BT_PAIR_NONE) {
+        bt_handle_pairing();
+        action = ACTION_REDRAW;
+    }
     switch (action) {
         case ACTION_REDRAW: {
             if (bt_status_changed) {
@@ -545,12 +622,27 @@ int bt_action_callback(int action, struct gui_synclist *lists)
                 return ACTION_REDRAW;
             }
             esp_err_t ret;
+            if (bt_connected && memcmp(entry->addr, bt_conn_addr, ESP_BD_ADDR_LEN) == 0) {
+                bt_set_status(true, "Already connected to %s", entry->name);
+                return ACTION_NONE;
+            }
             /* paging while an inquiry runs is unreliable; ESP-IDF's own
              * A2DP source example stops discovery first too */
             esp_bt_gap_cancel_discovery();
             memcpy(bt_target_addr, entry->addr, ESP_BD_ADDR_LEN);
             strlcpy(bt_target_name, entry->name, sizeof(bt_target_name));
             bt_log("connect " ESP_BD_ADDR_STR " '%s'", ESP_BD_ADDR_HEX(entry->addr), entry->name);
+            bt_connect_tries = 1;
+            if (bt_connected) {
+                /* We can only stream to one device. Hang up the current
+                 * one, the new one gets connected on DISCONNECTED. */
+                int st = audio_status();
+                bt_resume_after_switch = (st & AUDIO_STATUS_PLAY) && !(st & AUDIO_STATUS_PAUSE);
+                bt_switching = true;
+                bt_disconnect_device(bt_conn_addr);
+                bt_set_status(false, "Switching to %s...", entry->name);
+                return ACTION_NONE;
+            }
             if ((ret = esp_a2d_source_connect(entry->addr)) != ESP_OK) {
                 bt_set_status(true, "Connect failed to start (%d)", ret);
                 return ACTION_NONE;
@@ -562,11 +654,12 @@ int bt_action_callback(int action, struct gui_synclist *lists)
             bt_list_entry_t *entry = bt_entry_for_row(lists->selected_item);
             if (!entry)
                 return ACTION_NONE;
-            esp_err_t ret;
-            if ((ret = esp_a2d_source_disconnect(entry->addr)) != ESP_OK) {
-                bt_set_status(true, "Disconnect failed (%d)", ret);
+            if (!bt_connected || memcmp(entry->addr, bt_conn_addr, ESP_BD_ADDR_LEN) != 0) {
+                bt_set_status(true, "%s isn't connected", entry->name);
                 return ACTION_NONE;
             }
+            bt_switching = false;
+            bt_disconnect_device(entry->addr);
             bt_set_status(false, "Disconnecting...");
             return ACTION_NONE;
         }
@@ -583,20 +676,21 @@ const char * bt_getname(int selected_item, void * data, char * buffer, size_t bu
     (void)data;
     bt_list_entry_t *entry = bt_entry_for_row(selected_item);
     if (!entry) /* row 0 */
-        return selected_item % 2 == 0 ? "Scan again" : (bt_discovering ? "Searching..." : "");
+        return selected_item % 2 == 0 ? "Scan again" :
+               (bt_discovering ? "Searching..." : "Find nearby devices");
     if (selected_item % 2 == 0)
         return entry->name;
 
     bool paired = entry->rssi == -128;
-    if (bt_connected && memcmp(entry->addr, bt_target_addr, ESP_BD_ADDR_LEN) == 0) {
+    if (bt_connected && memcmp(entry->addr, bt_conn_addr, ESP_BD_ADDR_LEN) == 0) {
         if (bt_batt_pct >= 0)
-            snprintf(buffer, buffer_len, "Connected (%s)  Battery %d%%", bt_codec_name(), bt_batt_pct);
+            snprintf(buffer, buffer_len, "Connected, %s, %d%%", bt_codec_name(), bt_batt_pct);
         else
-            snprintf(buffer, buffer_len, "Connected (%s)", bt_codec_name());
+            snprintf(buffer, buffer_len, "Connected, %s", bt_codec_name());
     } else if (paired) {
         int batt = bt_saved_battery(entry->addr);
         if (batt >= 0)
-            snprintf(buffer, buffer_len, "Paired  Battery %d%% (last seen)", batt);
+            snprintf(buffer, buffer_len, "Paired, last seen %d%%", batt);
         else
             snprintf(buffer, buffer_len, "Paired");
     } else {
@@ -615,7 +709,7 @@ bool bt_scan(void)
     bt_idle_since = current_tick; /* don't auto-off while picking a device */
 
     bt_status_changed = false;
-    simplelist_info_init(&info, bt_status, (bt_entry_count() + 1) * 2, NULL);
+    simplelist_info_init(&info, bt_status, bt_entry_count() + 1, NULL); /* items, not lines */
     info.scroll_all = false;
     info.selection_size = 2;
     info.action_callback = bt_action_callback;
@@ -700,32 +794,38 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
             return;
         case ESP_BT_GAP_AUTH_CMPL_EVT:
             logf("gap auth " ESP_BD_ADDR_STR " stat %d", ESP_BD_ADDR_HEX(param->auth_cmpl.bda), param->auth_cmpl.stat);
-            if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS)
+            bt_pair_req = BT_PAIR_NONE;
+            if (param->auth_cmpl.stat == ESP_BT_STATUS_SUCCESS) {
                 bt_set_status(false, "Paired, connecting audio...");
-            else
-                bt_set_status(true, "Pairing failed (%d)", param->auth_cmpl.stat);
+            } else {
+                /* A half finished pairing leaves us with a key the other
+                 * side doesn't have, and every later connection fails. Drop
+                 * it so the next try pairs from scratch. */
+                esp_bt_gap_remove_bond_device(param->auth_cmpl.bda);
+                bt_connect_tries = 0; /* don't ask again on our own */
+                bt_set_status(true, "Pairing failed, try again");
+            }
             return;
-        case ESP_BT_GAP_CFM_REQ_EVT:
-            logf("gap %d %d", event, param->cfm_req.num_val);
-            /* we're connectable now: only pair with the device the user picked */
-            esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda,
-                memcmp(param->cfm_req.bda, bt_target_addr, ESP_BD_ADDR_LEN) == 0);
+        /* We're connectable, so only pair with the device picked in the list */
+        case ESP_BT_GAP_CFM_REQ_EVT: /* both sides show a code to compare */
+            logf("gap cfm %06lu", (unsigned long)param->cfm_req.num_val);
+            if (memcmp(param->cfm_req.bda, bt_target_addr, ESP_BD_ADDR_LEN) != 0)
+                esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, false);
+            else
+                bt_pair_request(BT_PAIR_CONFIRM, param->cfm_req.bda, param->cfm_req.num_val);
             break;
-        case ESP_BT_GAP_PIN_REQ_EVT: {
-            logf("gap %d %d", event, param->pin_req.min_16_digit);
+        case ESP_BT_GAP_KEY_NOTIF_EVT: /* the other side types in our code */
+            logf("gap key notif %06lu", (unsigned long)param->key_notif.passkey);
+            if (memcmp(param->key_notif.bda, bt_target_addr, ESP_BD_ADDR_LEN) == 0)
+                bt_pair_request(BT_PAIR_SHOW_CODE, param->key_notif.bda, param->key_notif.passkey);
+            break;
+        case ESP_BT_GAP_PIN_REQ_EVT: { /* old style PIN, often 0000 or 1234 */
+            logf("gap pin req %d", param->pin_req.min_16_digit);
             if (memcmp(param->pin_req.bda, bt_target_addr, ESP_BD_ADDR_LEN) != 0) {
                 esp_bt_pin_code_t pin_code = {0};
                 esp_bt_gap_pin_reply(param->pin_req.bda, false, 0, pin_code);
-            } else if (param->pin_req.min_16_digit) {
-                esp_bt_pin_code_t pin_code = {0};
-                esp_bt_gap_pin_reply(param->pin_req.bda, true, 16, pin_code);
             } else {
-                esp_bt_pin_code_t pin_code;
-                pin_code[0] = '0';
-                pin_code[1] = '0';
-                pin_code[2] = '0';
-                pin_code[3] = '0';
-                esp_bt_gap_pin_reply(param->pin_req.bda, true, 4, pin_code);
+                bt_pair_request(BT_PAIR_PIN, param->pin_req.bda, 0);
             }
             break;
         }
@@ -753,8 +853,8 @@ static int bt_forget_action(int action, struct gui_synclist *lists)
     bt_list_entry_t *e = &bt_entries[gui_synclist_get_sel_pos(lists)];
     if (!yesno_pop(str(LANG_BLUETOOTH_FORGET_CONFIRM)))
         return ACTION_REDRAW;
-    if (bt_connected && memcmp(e->addr, bt_target_addr, ESP_BD_ADDR_LEN) == 0)
-        esp_a2d_source_disconnect(e->addr);
+    if (bt_connected && memcmp(e->addr, bt_conn_addr, ESP_BD_ADDR_LEN) == 0)
+        bt_disconnect_device(e->addr);
     bt_log("forget " ESP_BD_ADDR_STR " '%s'", ESP_BD_ADDR_HEX(e->addr), e->name);
     esp_bt_gap_remove_bond_device(e->addr);
     /* drop it from the list */
@@ -966,13 +1066,17 @@ bool bt_sink_resume(void) {
  * 44.1 kHz is mandatory for SBC sinks and Rockbox resamples the rest. */
 static unsigned long bt_pinned_rate[1];
 
-static void bt_pin_rate(esp_a2d_mcc_t *pref_mcc)
+/* want: rate the stream already runs at, 0 for none */
+static void bt_pin_rate(esp_a2d_mcc_t *pref_mcc, unsigned long want)
 {
     struct pcm_sink_caps *c = &bt_pcm_sink.caps;
     unsigned long rate = c->samprs[c->default_freq];
     for (int i = 0; i < c->num_samprs; i++)
         if (c->samprs[i] == SAMPR_44)
             rate = SAMPR_44;
+    for (int i = 0; i < c->num_samprs; i++)
+        if (want && c->samprs[i] == want)
+            rate = want;
     current_codec->set_freq(rate, pref_mcc); /* encoder and offered config agree */
     bt_pinned_rate[0] = rate;
     c->samprs = bt_pinned_rate;
@@ -981,8 +1085,33 @@ static void bt_pin_rate(esp_a2d_mcc_t *pref_mcc)
     logf("codec %s pinned to %lu Hz", bt_codec_name(), rate);
 }
 
+static unsigned long bt_sbc_rate(const esp_a2d_mcc_t *m)
+{
+    switch (m->cie.sbc_info.samp_freq) {
+        case ESP_A2D_SBC_CIE_SF_48K: return SAMPR_48;
+        case ESP_A2D_SBC_CIE_SF_44K: return SAMPR_44;
+        case ESP_A2D_SBC_CIE_SF_32K: return SAMPR_32;
+        case ESP_A2D_SBC_CIE_SF_16K: return SAMPR_16;
+    }
+    return 0;
+}
+
+static bool bt_sbc_same(const esp_a2d_mcc_t *a, const esp_a2d_mcc_t *b)
+{
+    const typeof(a->cie.sbc_info) *x = &a->cie.sbc_info, *y = &b->cie.sbc_info;
+    return x->samp_freq == y->samp_freq && x->ch_mode == y->ch_mode &&
+           x->block_len == y->block_len && x->num_subbands == y->num_subbands &&
+           x->alloc_mthd == y->alloc_mthd && x->min_bitpool == y->min_bitpool &&
+           x->max_bitpool == y->max_bitpool;
+}
+
 static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
     switch (event) {
+        case ESP_A2D_AUDIO_CFG_EVT:
+            memcpy(&bt_open_cfg, &param->audio_cfg.mcc, sizeof(bt_open_cfg));
+            bt_open_cfg_valid = true;
+            logf("a2d cfg codec %d", bt_open_cfg.codec_type);
+            return;
         case ESP_A2D_CONNECTION_STATE_EVT:
             logf("a2d conn state %d rsn %d " ESP_BD_ADDR_STR, param->conn_stat.state, param->conn_stat.disc_rsn, ESP_BD_ADDR_HEX(param->conn_stat.remote_bda));
             if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
@@ -990,8 +1119,10 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                     && !bt_lookup_name(param->conn_stat.remote_bda, bt_target_name, sizeof(bt_target_name)))
                     bt_target_name[0] = 0;
                 memcpy(bt_target_addr, param->conn_stat.remote_bda, ESP_BD_ADDR_LEN);
+                memcpy(bt_conn_addr, param->conn_stat.remote_bda, ESP_BD_ADDR_LEN);
                 bt_save_last(bt_target_addr);
                 bt_connected = true;
+                bt_connect_tries = 0;
                 bt_batt_pct = -1;
                 esp_hf_ag_slc_connect(param->conn_stat.remote_bda); /* battery */
                 bt_set_status(true, "Connected: %s", bt_target_name[0] ? bt_target_name : "headphones");
@@ -1002,11 +1133,26 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                 bt_current_state = ESP_A2D_AUDIO_STATE_SUSPEND;
                 esp_bt_gap_read_remote_name(param->conn_stat.remote_bda);
             } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
-                if (bt_connected)
+                bt_open_cfg_valid = false;
+                if (bt_connected && bt_switching) {
+                    bt_switching = false;
+                    bt_set_status(false, "Connecting to %s...", bt_target_name);
+                    esp_a2d_source_connect(bt_target_addr);
+                } else if (bt_connected) {
                     bt_set_status(true, param->conn_stat.disc_rsn == ESP_A2D_DISC_RSN_NORMAL ? "Disconnected" : "Connection lost");
-                else
+                } else if (bt_connect_tries > 0 && bt_connect_tries < 3) {
+                    /* Headphones busy with another device (a phone) only
+                     * listen for new connections now and then, so one page
+                     * often misses. Phones retry too. */
+                    bt_connect_tries++;
+                    bt_set_status(false, "Connecting to %s (try %d of 3)...", bt_target_name, bt_connect_tries);
+                    esp_a2d_source_connect(bt_target_addr);
+                } else {
+                    bt_connect_tries = 0;
+                    bt_resume_after_switch = false;
                     bt_set_status(true, global_settings.bt_debug_log ?
                                   "Could not connect (see bt_log.txt)" : "Could not connect");
+                }
                 bt_connected = false;
                 bt_idle_since = current_tick;
                 bt_avrc_play_status_registered = false;
@@ -1027,6 +1173,10 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
             if (param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY) {
                 pcm_switch_sink(PCM_SINK_BLUETOOTH);
                 setvol(); /* BT uses software volume */
+                if (bt_resume_after_switch) { /* switched devices mid song */
+                    bt_resume_after_switch = false;
+                    button_queue_post(BUTTON_MULTIMEDIA_PLAY, 0);
+                }
             } else if (sampr_switch_ongoing && param->media_ctrl_stat.cmd == ESP_A2D_MEDIA_CTRL_SUSPEND) {
                 esp_a2d_source_set_pref_mcc(conn_hdl, &new_pref_mcc);
             }
@@ -1058,12 +1208,30 @@ static void bt_app_a2d_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param) {
                 .is_edr = btc_av_is_peer_edr(),
             };
             conn_hdl = param->a2d_report_snk_codec_caps_stat.conn_hdl;
+            /* The stream is already open by now. Asking for different
+             * settings means an AVDTP reconfigure, and some speakers (a
+             * Google Nest) reject that, which closes the connection. So if
+             * the stream was opened with SBC, stay inside its settings and
+             * keep it when we can. */
+            bool keep = bt_open_cfg_valid && current_codec == &a2dp_codec_sbc &&
+                        bt_open_cfg.codec_type == ESP_A2D_MCT_SBC;
+            if (keep) {
+                peer_caps.cie.sbc_info.min_bitpool = MAX(peer_caps.cie.sbc_info.min_bitpool,
+                                                         bt_open_cfg.cie.sbc_info.min_bitpool);
+                peer_caps.cie.sbc_info.max_bitpool = MIN(peer_caps.cie.sbc_info.max_bitpool,
+                                                         bt_open_cfg.cie.sbc_info.max_bitpool);
+            }
             current_codec->init(&bt_pcm_sink.caps, &peer_info, &pref_mcc);
-            bt_pin_rate(&pref_mcc);
+            bt_pin_rate(&pref_mcc, keep ? bt_sbc_rate(&bt_open_cfg) : 0);
+            if (keep && bt_sbc_same(&pref_mcc, &bt_open_cfg)) {
+                logf("keeping the stream config, no reconfigure");
+                esp_a2d_media_ctrl(ESP_A2D_MEDIA_CTRL_CHECK_SRC_RDY);
+                break;
+            }
             esp_err_t ret = esp_a2d_source_set_pref_mcc(param->a2d_report_snk_codec_caps_stat.conn_hdl, &pref_mcc);
-
             if (ret != ESP_OK) {
-                panicf("%s a2dp source set pref mcc failed: %d", __func__, ret);
+                bt_log("set pref mcc failed (%d)", ret);
+                esp_a2d_source_disconnect(bt_target_addr);
             }
             break;
         }
